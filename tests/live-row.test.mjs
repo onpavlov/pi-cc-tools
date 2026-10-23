@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import {
 	HIDDEN_OUTPUT,
+	HOLD_MS,
 	createPi,
 	loadExtension,
 	makeTool,
@@ -14,6 +15,7 @@ import {
 	test,
 	toolResult,
 	tree,
+	wait,
 } from "./harness.mjs";
 
 const install = await loadExtension();
@@ -140,24 +142,56 @@ test("the newest executing call replaces the previous one", async () => {
 	assert.match(rows[0], / ● Searching "hunk"/);
 });
 
-test("a finished call leaves no activity row while the model thinks", async () => {
+test("a finished call keeps its row briefly, then leaves while the model thinks", async () => {
 	await freshRun();
 	const box = tree();
 	const call = box.add(tool("bash", "solo-1", { command: "ls" }));
 	call.markExecutionStarted();
 	assert.match(box.rows()[0], /Running ls/);
 	call.updateResult(toolResult({ durationMs: 4200 }));
-	// Regression: the row used to stay as "Running ls · 4s" until the next call.
-	assert.deepEqual(box.rows(), [], "nothing is running, so nothing claims to run");
+	// The call was on screen for a moment only: the row is held so it can be read.
+	assert.match(box.rows()[0], /Running ls · 4s/);
+	await wait(HOLD_MS + 150);
+	assert.deepEqual(box.rows(), [], "nothing is running, so the held row collapses");
 });
 
-test("a failed call does not leave a frozen 0s row behind", async () => {
+test("an instantly failed call shows its row briefly, then stops claiming to run", async () => {
 	await freshRun();
 	const box = tree();
 	const call = box.add(tool("bash", "failed-1", { command: "UA=\"x y\" for u in \\" }));
 	call.markExecutionStarted();
 	call.updateResult(toolResult({ isError: true, durationMs: 82 }));
-	assert.deepEqual(box.rows(), [], "a call that failed instantly must not linger at · 0s");
+	assert.match(box.rows()[0], /Running/, "the row is still readable right after the failure");
+	await wait(HOLD_MS + 150);
+	assert.deepEqual(box.rows(), [], "a call that failed instantly must not linger");
+});
+
+test("a new call replaces a held row without waiting out the dwell", async () => {
+	await freshRun();
+	const box = tree();
+	// A command that ends before it can be read keeps its row...
+	const first = box.add(tool("bash", "hold-1", { command: "true" }));
+	first.markExecutionStarted();
+	first.updateResult(toolResult({ durationMs: 10 }));
+	assert.match(box.rows()[0], /Running true/);
+	// ...but the next call takes the line over immediately.
+	const second = box.add(tool("bash", "hold-2", { command: "sleep 1" }));
+	second.markExecutionStarted();
+	box.text(); // the frame in which a new call appears may still show the old row
+	const rows = box.rows();
+	assert.equal(rows.filter((row) => row.includes("Running")).length, 1, "only one activity row at a time");
+	assert.match(rows[0], /Running sleep/);
+});
+
+test("a call watched for longer than the dwell disappears at once", async () => {
+	await freshRun();
+	const box = tree();
+	const call = box.add(tool("bash", "watch-1", { command: "sleep 9" }));
+	call.markExecutionStarted();
+	box.text();
+	await wait(HOLD_MS + 150);
+	call.updateResult(toolResult({ durationMs: 4200 }));
+	assert.deepEqual(box.rows(), [], "the row was on screen long enough already");
 });
 
 test("setting hideComponent removes the row entirely", async () => {

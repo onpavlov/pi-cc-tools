@@ -33,6 +33,12 @@ const SUMMARY_ENTRY = "cc-tools-summary";
 const ANSI = new RegExp("\\x1b\\[[0-9;?]*[ -/]*[@-~]|\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)", "g");
 /** Left inset of the activity and summary rows, matching the answer text column. */
 const ROW_PAD = " ";
+/**
+ * Minimum time a live row stays on screen. A call that ends sooner than this
+ * keeps its row for the rest of the window instead of blinking out, so a fast
+ * tool is still readable; a call that replaced it hides it at once.
+ */
+const LIVE_DWELL_MS = 900;
 
 /** Opt-in tracing: set PI_CC_TOOLS_DEBUG=/path/to/log to capture what the rows do. */
 function trace(message: string): void {
@@ -101,9 +107,17 @@ type PatchState = {
 	thinkingStartAt: number;
 	/** One-shot timer that keeps the elapsed seconds moving while a tool runs. */
 	ticker?: ReturnType<typeof setTimeout>;
+	/** toolCallId -> when its live row first appeared: the start of its dwell window. */
+	liveShownAt?: Map<string, number>;
+	/** Calls whose row already collapsed at settle: never shown as live again. */
+	settled?: Set<string>;
+	/** One-shot timer that repaints when a finished call's held row is due to collapse. */
+	dwell?: ReturnType<typeof setTimeout>;
 	/** Last time a live row was actually drawn, and whether it was still running. */
 	lastLiveAt?: number;
 	liveRunning?: boolean;
+	/** Last elapsed value written to the debug trace, so it logs per second, not per repaint. */
+	__ccSeconds?: number;
 };
 
 type Styler = {
@@ -331,6 +345,26 @@ function stopTicker(st: PatchState): void {
 	st.ticker = undefined;
 }
 
+function stopDwell(st: PatchState): void {
+	if (st.dwell === undefined) return;
+	clearTimeout(st.dwell);
+	st.dwell = undefined;
+}
+
+/** Ask for one repaint when the held row is due to collapse; that render drops it. */
+function armDwell(st: PatchState, ui: any, remainingMs: number): void {
+	stopDwell(st);
+	if (typeof ui?.requestRender !== "function") return;
+	const timer = setTimeout(() => {
+		st.dwell = undefined;
+		trace("D fire");
+		ui.requestRender();
+	}, remainingMs);
+	// A pending hold must never keep the process alive on its own.
+	timer.unref?.();
+	st.dwell = timer;
+}
+
 /**
  * Pi repaints the transcript only when something changes, so a tool that runs
  * without emitting output would freeze its elapsed seconds. Re-request a render
@@ -449,6 +483,31 @@ function liveRow(st: PatchState, component: any, width: number): string[] {
 	const lines = [`${ROW_PAD}${head}`];
 	if (command) lines.push(`${ROW_PAD}  ${style.fg("dim", "└ $ ")}${style.fg("muted", command)}`);
 	return ["", ...lines.map((line) => truncateToWidth(line, width, "…"))];
+}
+
+/**
+ * The row for the newest call: while it runs, and for the remainder of its
+ * dwell window right after it finishes. The window opens when the row is first
+ * drawn, so a call already on screen for longer than the dwell disappears at
+ * once. A call that settled once is never shown again, even if the run is
+ * reopened by `agent_start`.
+ */
+function liveRows(st: PatchState, component: any, width: number): string[] {
+	const id = String(component.toolCallId);
+	const now = Date.now();
+	if (st.settled?.has(id)) return [];
+	if (!st.liveShownAt) st.liveShownAt = new Map();
+	if (stillRunning(component)) {
+		stopDwell(st);
+		if (!st.liveShownAt.has(id)) st.liveShownAt.set(id, now);
+		return liveRow(st, component, width);
+	}
+	const shownAt = st.liveShownAt.get(id) ?? now;
+	st.liveShownAt.set(id, shownAt);
+	const remaining = shownAt + LIVE_DWELL_MS - now;
+	if (remaining <= 0) return [];
+	armDwell(st, component.ui, remaining);
+	return liveRow(st, component, width);
 }
 
 function summaryRow(st: PatchState, run: Run, width: number): string[] {
@@ -608,8 +667,8 @@ function installPatch(): PatchState {
 		if (run.finished) return this.toolCallId === summaryOwner(run) ? summaryRow(st, run, width) : [];
 		if (this.toolCallId !== liveToolId(run)) return [];
 		// A finished call must not keep claiming to run while the model thinks:
-		// its row would freeze at an old (often 0s) duration.
-		return stillRunning(this) ? liveRow(st, this, width) : [];
+		// its held row collapses once the dwell window is over.
+		return liveRows(st, this, width);
 	};
 
 	proto.handleMouse = function (event: any): any {
@@ -648,7 +707,7 @@ function installThinkingFilter(): void {
 	proto.render = function (width: number): string[] {
 		const lines: string[] = originalRender.call(this, width);
 		// Read the flag at render time: a reload may install a new patch state.
-		const state = ToolExecutionComponent.prototype[PATCH] as PatchState | undefined;
+		const state = (ToolExecutionComponent.prototype as any)[PATCH] as PatchState | undefined;
 		if (state?.enabled === false) return lines;
 		const label = String(this.hiddenThinkingLabel ?? "").trim();
 		const kept: string[] = [];
@@ -675,6 +734,7 @@ export default function (pi: ExtensionAPI) {
 	st.toolStartAt.clear();
 	st.thinkingStartAt = 0;
 	stopTicker(st);
+	stopDwell(st);
 
 	// Every handler body is guarded: a throwing lifecycle hook would otherwise
 	// leave the rows permanently hidden with no summary.
@@ -692,8 +752,11 @@ export default function (pi: ExtensionAPI) {
 		st.live = null;
 		st.announced = new Set();
 		st.toolStartAt.clear();
+		st.liveShownAt = new Map();
+		st.settled = new Set();
 		st.thinkingStartAt = 0;
 		stopTicker(st);
+		stopDwell(st);
 		loadRuns(ctx, st);
 		// The placeholder text is filtered out of the transcript; keeping a stable
 		// label is what lets the filter recognise those lines.
@@ -722,6 +785,8 @@ export default function (pi: ExtensionAPI) {
 		trace(`E before_agent_start (${messageType})`);
 		closeThinking(st);
 		stopTicker(st);
+		stopDwell(st);
+		st.liveShownAt = new Map();
 		// A queued prompt can start while the previous run is still open; close it
 		// so its rows collapse behind their own summary.
 		if (st.live && !st.live.finished) {
@@ -757,8 +822,14 @@ export default function (pi: ExtensionAPI) {
 	const settle = (): void => {
 		closeThinking(st);
 		stopTicker(st);
+		stopDwell(st);
 		const run = st.live;
 		if (!run || run.finished) return;
+		// A settled call must not come back as an activity row when the run is
+		// reopened (retry, compaction continuation).
+		if (!st.settled) st.settled = new Set();
+		for (const id of run.toolIds) st.settled.add(id);
+		st.liveShownAt = new Map();
 		run.finished = true;
 		run.workedMs = Date.now() - run.startedAt;
 		trace(`E settle worked=${run.workedMs} tools=${run.toolIds.length} counts=${JSON.stringify(run.counts)}`);
@@ -782,11 +853,14 @@ export default function (pi: ExtensionAPI) {
 
 	on("session_shutdown", () => {
 		stopTicker(st);
+		stopDwell(st);
 		st.live = null;
 		st.runs = new Map();
 		st.announced = new Set();
 		st.toolStartAt.clear();
 		st.shownSeconds = new Map();
+		st.liveShownAt = new Map();
+		st.settled = new Set();
 		st.thinkingStartAt = 0;
 	});
 

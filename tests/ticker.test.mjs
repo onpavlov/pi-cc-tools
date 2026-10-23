@@ -3,7 +3,7 @@
  * extension has to ask for a repaint once a second while a call is in flight.
  */
 import assert from "node:assert/strict";
-import { createPi, loadExtension, makeTool, makeUi, runTests, test, toolResult, tree } from "./harness.mjs";
+import { HOLD_MS, createPi, loadExtension, makeTool, makeUi, runTests, test, toolResult, tree } from "./harness.mjs";
 
 const install = await loadExtension();
 const { api, emit } = createPi();
@@ -65,18 +65,19 @@ test("a component that never saw executionStarted still ticks", async () => {
 	assert.match(box.rows()[0], /· [12]s/);
 });
 
-test("the row disappears when the call finishes instead of freezing", async () => {
+test("the row is held for a moment when the call finishes, then goes away", async () => {
 	await startTurn();
 	const call = tool("bash", "tick-4", { command: "sleep 9" });
 	call.markExecutionStarted();
 	const box = boxFor(call);
 	box.text();
 	assert.match(box.rows()[0], /Running sleep/);
-	// Regression: a finished call used to keep showing "· 0s" (or a stale
-	// duration) for as long as the model kept thinking.
+	// The final duration shows, and the row is held so it can be read...
 	call.updateResult(toolResult({ durationMs: 8200 }));
-	assert.deepEqual(box.rows(), []);
-	await wait(1100);
+	assert.match(box.rows()[0], /Running sleep · 8s/);
+	// ...then collapses. Regression: a finished call used to keep showing a
+	// stale "· 0s" row for as long as the model kept thinking.
+	await wait(HOLD_MS + 200);
 	assert.deepEqual(box.rows(), [], "no stale row comes back on a repaint");
 });
 

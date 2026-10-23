@@ -9,7 +9,7 @@ running. When the turn settles, every tool row collapses into one summary line a
    └ $ npm view hunk version 2>&1 | head -5
 
  Thought for 11s, searched for 2 patterns, read 3 files, ran 5 shell commands, spawned 2 agents
-```text
+```
 
 Display only: model messages, tool results and the session transcript are never touched.
 
@@ -17,7 +17,7 @@ Display only: model messages, tool results and the session transcript are never 
 
 ```bash
 pi install git:github.com/onpavlov/pi-cc-tools
-```text
+```
 
 Other sources:
 
@@ -25,7 +25,7 @@ Other sources:
 pi install npm:pi-cc-tools          # once published
 pi install ./pi-cc-tools            # local checkout
 pi -e ./pi-cc-tools/extensions/cc-tools/index.ts   # try it for one run
-```text
+```
 
 ## What it draws
 
@@ -38,16 +38,19 @@ pi -e ./pi-cc-tools/extensions/cc-tools/index.ts   # try it for one run
    └ $ npm test -- --watch=false
  ● Updating the todo list · 0s
  ● web_search cats · 1s
-```text
+```
 
-Only the newest still-executing call is shown; finished calls disappear until the turn settles, so
-there is never a stale "Running" row during the model's thinking.
+Only the newest still-executing call is shown. A call that ends sooner than the dwell window keeps
+its line for the rest of that window (under a second), so a fast command is readable instead of
+flashing past; the next call replaces the line at once, without waiting the window out. After that
+the rows stay hidden until the turn settles, so the model's thinking never sits under a stale
+"Running" line.
 
 **When the turn settles** — the run's summary, placed on its last call:
 
 ```text
  Thought for 15s, read 3 files, edited 1 file, ran 27 shell commands, used 6 todos, spawned 5 agents
-```text
+```
 
 Phrases appear in a fixed order: thinking, search, read, edit, shell, agents, other tools.
 Durations switch to minutes (`Thought for 2m 5s`), and `Worked for Ns` is used when a run has
@@ -90,8 +93,8 @@ when the elapsed timer arms and fires, and what a settle persisted.
 ## Development
 
 ```bash
-npm test        # 92 offline tests, no model and no terminal
-```text
+npm test        # 94 offline tests, no model and no terminal
+```
 
 The tests import the extension through `jiti` the same way Pi does, drive lifecycle events through a
 stub `ExtensionAPI`, and render components through Pi's real container. They run one file per process
@@ -99,7 +102,7 @@ because the patch state lives on `ToolExecutionComponent.prototype`.
 
 ```bash
 CC_TOOLS_EXTENSION=/path/to/variant.ts npm test   # run the suite against a modified copy
-```text
+```
 
 See [`tests/README.md`](tests/README.md) for the file-by-file coverage map and the regression list.
 
@@ -108,7 +111,7 @@ See [`tests/README.md`](tests/README.md) for the file-by-file coverage map and t
 ```text
 extensions/cc-tools/index.ts   the extension
 tests/                         offline renderer and lifecycle tests
-```text
+```
 
 ## Known limitations
 

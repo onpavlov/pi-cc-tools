@@ -28,11 +28,11 @@ CC_TOOLS_EXTENSION=/tmp/variant.ts npm test
 
 | File | Covers |
 | --- | --- |
-| `live-row.test.mjs` | verb/detail per tool, command line, program extraction, path shortening, newest-call-only rule, `hideComponent`, expanded fallback, output never leaking into the live row |
+| `live-row.test.mjs` | verb/detail per tool, command line, program extraction, path shortening, newest-call-only rule, hold window after a fast finish, `hideComponent`, expanded fallback, output never leaking into the live row |
 | `summary.test.mjs` | category phrases and their order, singular/plural, `×N` list for other tools, mcp name shortening, thinking threshold, `1m`/`2m 5s` durations, worked-time fallback, one summary per run, replay counts |
 | `layout.test.mjs` | widths 1…200 for live/summary/fallback rows, zero and negative widths, ellipsis cut, ANSI styling not inflating the measured width |
 | `state.test.mjs` | `agent_before_settle` / `agent_settled` persistence, settle idempotency, new prompt vs custom-message runs, `agent_start` reopening, `message_end` counting and dedupe, `session_start`/`session_shutdown` resets, replay of a whole branch |
-| `ticker.test.mjs` | the elapsed-seconds timer: arming, advancing, partial results, missing `requestRender`, stopping on settle, per-call restart, recorded duration |
+| `ticker.test.mjs` | the elapsed-seconds timer: arming, advancing, partial results, missing `requestRender`, stopping on settle, per-call restart, recorded duration, the held row collapsing when its window ends |
 | `thinking.test.mjs` | hidden-thinking placeholder removal, blank-line cleanup, thinking-only messages, label-driven matching, behaviour when compact tools are off |
 | `commands.test.mjs` | `/cc-tools on\|off\|toggle\|reveal\|hide`, invalid option, click-to-reveal, clicks that belong to the host |
 | `reload.test.mjs` | `/reload` semantics: an older copy's wrapper switched off, a repeated install not stacking, a reload swapping closures while keeping counters, the new code rendering immediately, the thinking filter rebuilding |
@@ -85,7 +85,10 @@ Each of these was a real bug; the test named in brackets fails if it comes back.
 | `/reload` silently keeping the previous code (stale closures) | `reload: the reloaded module's code answers immediately` |
 | Stale live row surviving a session switch | `state: session_shutdown drops the live run` |
 | Placeholder `Thinking…` line visible above the answer | `thinking: the placeholder is dropped and the answer is kept` |
-| Stale `Running … · 0s` row hanging after a finished/failed call | `live-row: a finished call leaves no activity row…`, `live-row: a failed call does not leave a frozen 0s row` |
+| Stale `Running … · 0s` row hanging after a finished/failed call | `live-row: a finished call keeps its row briefly…`, `live-row: an instantly failed call shows its row briefly…` |
+| A fast call's row blinking out before it can be read | `live-row: a finished call keeps its row briefly…`, `ticker: the row is held for a moment when the call finishes…` |
+| A held row outliving the call that replaced it | `live-row: a new call replaces a held row…`, `live-row: a call watched for longer than the dwell disappears at once` |
+| A settled call reappearing as an activity row when the run is reopened | `state: agent_start reopens a settled run…` |
 | Timer jumping back from `1s` to `0s` mid-call | `ticker: a partial result carrying durationMs 0 does not reset the timer` |
 | Summary counting subagent/nested calls (`spawned 10 agents` for 5) | `summary: calls the transcript never announced are not counted` |
 | `Running (Macintosh;` for `UA="Mozilla/5.0 (Macintosh; …" cmd` | `live-row: the program name skips env assignments…` |

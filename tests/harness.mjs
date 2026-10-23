@@ -139,6 +139,10 @@ export function assistantMessage(message, label = "Thinking…") {
 
 /** Tool result payload with output that must never leak into a live row. */
 export const HIDDEN_OUTPUT = "OUTPUT_SHOULD_BE_HIDDEN";
+/** How long a finished call keeps its row (LIVE_DWELL_MS in the extension). */
+export const HOLD_MS = 900;
+/** Wait past the hold window, so a render now sees the row collapsed. */
+export const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function toolResult(overrides = {}) {
 	return { content: [{ type: "text", text: HIDDEN_OUTPUT }], isError: false, durationMs: 4200, ...overrides };
 }
