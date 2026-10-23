@@ -1,0 +1,51 @@
+{
+  "name": "pi-cc-tools",
+  "version": "0.1.0",
+  "description": "Claude Code-style tool rows for Pi: one live activity line while a call runs, one summary line per turn.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "tui",
+    "tool-output"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onpavlov/pi-cc-tools.git"
+  },
+  "license": "MIT",
+  "files": [
+    "extensions/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/cc-tools/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
