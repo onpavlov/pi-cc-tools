@@ -67,8 +67,8 @@ test("a message without thinking is untouched", async () => {
 });
 
 test("the filter follows the label pi supplies, not a hardcoded string", async () => {
-	const custom = rows(assistantMessage(thinkingAndAnswer(), "Размышляю…"));
-	assert.ok(!custom.some((line) => line.includes("Размышляю")), "a custom placeholder is dropped too");
+	const custom = rows(assistantMessage(thinkingAndAnswer(), "Pondering…"));
+	assert.ok(!custom.some((line) => line.includes("Pondering…")), "a custom placeholder is dropped too");
 	assert.ok(custom.some((line) => line.includes("answer")), "the answer is kept");
 
 	// Only the exact placeholder line is removed; answer text that merely starts
