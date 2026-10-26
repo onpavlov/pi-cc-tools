@@ -3,7 +3,18 @@
  * terminal to a very wide one, for the live row, the summary and the fallback.
  */
 import assert from "node:assert/strict";
-import { createPi, loadExtension, makeTool, makeUi, runTests, test, toolResult, tree, tui } from "./harness.mjs";
+import {
+	assistantMessage,
+	createPi,
+	loadExtension,
+	makeTool,
+	makeUi,
+	runTests,
+	test,
+	toolResult,
+	tree,
+	tui,
+} from "./harness.mjs";
 
 const install = await loadExtension();
 const { api, emit } = createPi();
@@ -24,6 +35,20 @@ function assertFits(rows, width, label) {
 	for (const row of rows) {
 		assert.ok(tui.visibleWidth(row) <= width, `${label} row exceeds width ${width}: ${JSON.stringify(row)}`);
 	}
+}
+
+/** A settled run whose summary band is rendered by its only call. */
+async function settledSummary(id) {
+	await startRun();
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: {} }] } },
+		{ ui },
+	);
+	await emit("agent_before_settle", {}, { ui });
+	const box = tree();
+	box.add(tool("bash", id, { command: "true" })).updateResult(toolResult());
+	return box;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,6 +82,26 @@ test("summary rows stay inside every supported width", async () => {
 	const box = tree();
 	box.add(tool("bash", "w-4", { command: "ls" })).updateResult(toolResult());
 	for (const width of WIDTHS) assertFits(box.frame(width), width, `summary@${width}`);
+});
+
+test("the summary rule spans the render width and closes the band", async () => {
+	const box = await settledSummary("w-band");
+	box.add(assistantMessage({ role: "assistant", content: [{ type: "text", text: "Answer." }] }));
+	for (const width of [10, 20, 40, 80, 120, 200]) {
+		const frame = box.frame(width);
+		assert.equal(frame.length, 5, `width ${width}: gap, summary, rule, gap, answer`);
+		assert.equal(frame[0], "", `width ${width}: activity is separated from the band`);
+		assert.equal(tui.visibleWidth(frame[2]), width, `rule fills width ${width}`);
+		assert.equal(frame[2], ` ${"─".repeat(width - 1)}`, `rule is inset like the summary at ${width}`);
+		assert.equal(frame[3], "", `width ${width}: exactly one blank line under the rule`);
+	}
+});
+
+test("a one-column terminal drops the rule instead of wrapping the layout", async () => {
+	const box = await settledSummary("w-narrow");
+	assert.deepEqual(box.frame(1), ["", "…"]);
+	assertFits(box.frame(2), 2, "narrow-band@2");
+	assert.ok(box.frame(2)[2].includes("─"), "a two-column terminal still fits one rule cell");
 });
 
 test("fallback rows stay inside every supported width", async () => {

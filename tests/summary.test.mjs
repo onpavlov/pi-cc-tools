@@ -3,7 +3,7 @@
  * formatting, and the rule that exactly one row carries it.
  */
 import assert from "node:assert/strict";
-import { createPi, loadExtension, makeTool, makeUi, runTests, test, toolResult, tree } from "./harness.mjs";
+import { assistantMessage, createPi, loadExtension, makeTool, makeUi, runTests, test, toolResult, tree } from "./harness.mjs";
 
 const install = await loadExtension();
 const { api, emit } = createPi();
@@ -90,7 +90,7 @@ test("categories appear in a stable order with correct plural forms", async () =
 	const row = summaryTree("o-9").rows(200)[0];
 	assert.equal(
 		row.trim(),
-		"searched for 1 pattern, read 2 files, edited 1 file, ran 3 shell commands, spawned 2 agents",
+		"○ searched for 1 pattern, read 2 files, edited 1 file, ran 3 shell commands, spawned 2 agents",
 	);
 });
 
@@ -108,7 +108,7 @@ test("singular forms drop the trailing s", async () => {
 	const row = summaryTree("s-6").rows(200)[0].trim();
 	assert.equal(
 		row,
-		"searched for 1 pattern, read 1 file, edited 1 file, ran 1 shell command, spawned 1 agent, used 1 todo",
+		"○ searched for 1 pattern, read 1 file, edited 1 file, ran 1 shell command, spawned 1 agent, used 1 todo",
 	);
 });
 
@@ -119,7 +119,7 @@ test("one other tool is named with a plural, several are listed with counts", as
 		["x-2", "todo"],
 	]);
 	await settle();
-	assert.equal(summaryTree("x-2").rows()[0].trim(), "used 2 todos");
+	assert.equal(summaryTree("x-2").rows()[0].trim(), "○ used 2 todos");
 
 	await startTurn();
 	await countCalls([
@@ -127,22 +127,25 @@ test("one other tool is named with a plural, several are listed with counts", as
 		["y-2", "mcp__jira__get_issue"],
 	]);
 	await settle();
-	assert.equal(summaryTree("y-2").rows(200)[0].trim(), "used todo ×1, jira:get_issue ×1");
+	assert.equal(summaryTree("y-2").rows(200)[0].trim(), "○ used todo ×1, jira:get_issue ×1");
 });
 
 test("mcp tool names lose the prefix and double underscores", async () => {
 	await startTurn();
 	await countCalls([["m-1", "mcp__confluence__search_pages"]]);
 	await settle();
-	assert.equal(summaryTree("m-1").rows()[0].trim(), "used 1 confluence:search_pages");
+	assert.equal(summaryTree("m-1").rows()[0].trim(), "○ used 1 confluence:search_pages");
 });
 
 test("thinking time is reported only when it rounds to at least one second", async () => {
 	assert.equal(
 		(await replaySummary(branchFor({ thinkingMs: 400, workedMs: 5000 }), "r-1")).trim(),
-		"ran 1 shell command",
+		"○ ran 1 shell command",
 	);
-	assert.match(await replaySummary(branchFor({ thinkingMs: 5200, workedMs: 5000 }), "r-1"), /^ Thought for 5s, ran 1 shell command$/);
+	assert.match(
+		await replaySummary(branchFor({ thinkingMs: 5200, workedMs: 5000 }), "r-1"),
+		/^ ○ Thought for 5s, ran 1 shell command$/,
+	);
 });
 
 test("durations switch to minutes past sixty seconds", async () => {
@@ -163,7 +166,7 @@ test("a run with no counted calls falls back to worked time", async () => {
 	// An anonymous call is never counted, so nothing but the duration is left.
 	const box = tree();
 	box.add(tool("bash", undefined, { command: "true" }));
-	assert.match(box.rows()[0].trim(), /^Worked for \d+s$/);
+	assert.match(box.rows()[0].trim(), /^○ Worked for \d+s$/);
 });
 
 test("only the newest call of a settled run carries the summary", async () => {
@@ -197,9 +200,9 @@ test("each settled run renders its own summary, newest tool only", async () => {
 	first.updateResult(toolResult());
 	second.updateResult(toolResult());
 	const rows = box.rows();
-	assert.equal(rows.length, 2, "history keeps one summary per run");
+	assert.equal(rows.length, 4, "history keeps one summary band per run");
 	assert.match(rows[0], /read 1 file/);
-	assert.match(rows[1], /ran 1 shell command/);
+	assert.match(rows[2], /ran 1 shell command/);
 });
 
 test("calls the transcript never announced are not counted", async () => {
@@ -216,7 +219,9 @@ test("calls the transcript never announced are not counted", async () => {
 	}
 	box.text();
 	await settle();
-	assert.deepEqual(box.rows().map((row) => row.trim()), ["ran 1 shell command"]);
+	const rows = box.rows();
+	assert.equal(rows.length, 2, "summary line plus its rule, nothing from the nested calls");
+	assert.equal(rows[0].trim(), "○ ran 1 shell command");
 });
 
 test("replay re-derives counts from messages instead of the persisted entry", async () => {
@@ -237,7 +242,22 @@ test("replay re-derives counts from messages instead of the persisted entry", as
 		{ type: "custom", customType: "cc-tools-summary", data: { thinkingMs: 0, workedMs: 1000, counts: { read: 99 } } },
 	];
 	const row = await replaySummary(branch, "d-3");
-	assert.equal(row.trim(), "read 1 file, ran 2 shell commands");
+	assert.equal(row.trim(), "○ read 1 file, ran 2 shell commands");
+});
+
+test("the summary is a band: a gap, its own marker line, then a rule", async () => {
+	await startTurn();
+	await countCalls([["bd-1", "bash"]]);
+	await settle();
+	const box = summaryTree("bd-1");
+	assert.deepEqual(box.frame(40), ["", " ○ ran 1 shell command", ` ${"─".repeat(39)}`]);
+
+	// The answer brings its own leading gap: the band must not add a second.
+	box.add(assistantMessage({ role: "assistant", content: [{ type: "text", text: "Answer." }] }));
+	const frame = box.frame(40);
+	assert.equal(frame[3], "", "exactly one blank line between the rule and the answer");
+	assert.match(frame[4], /^ Answer\./);
+	assert.equal(frame.length, 5);
 });
 
 test("a summary line is truncated to the available width", async () => {

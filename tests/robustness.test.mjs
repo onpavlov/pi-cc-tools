@@ -58,7 +58,7 @@ test("both installs share one state, so counts are not doubled", async () => {
 	await emit("message_end", message, { ui });
 	await second.emit("message_end", message, { ui });
 	await emit("agent_before_settle", {}, { ui });
-	assert.equal(boxFor(tool("bash", "shared-1", { command: "ls" })).rows()[0].trim(), "ran 1 shell command");
+	assert.equal(boxFor(tool("bash", "shared-1", { command: "ls" })).rows()[0].trim(), "○ ran 1 shell command");
 });
 
 test("a component rendered without any live run falls back instead of throwing", async () => {

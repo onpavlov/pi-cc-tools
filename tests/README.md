@@ -29,8 +29,8 @@ CC_TOOLS_EXTENSION=/tmp/variant.ts npm test
 | File | Covers |
 | --- | --- |
 | `live-row.test.mjs` | verb/detail per tool, command line, program extraction, path shortening, one-row rule, a finished row kept with its check/cross until the next call or the summary, hand-over only once the call's arguments are complete, `hideComponent`, expanded fallback, output never leaking into a row, the fixed-height activity slot and its hand-over between calls |
-| `summary.test.mjs` | category phrases and their order, singular/plural, `×N` list for other tools, mcp name shortening, thinking threshold, `1m`/`2m 5s` durations, worked-time fallback, one summary per run, replay counts |
-| `layout.test.mjs` | widths 1…200 for live/summary/fallback rows, zero and negative widths, ellipsis cut, ANSI styling not inflating the measured width |
+| `summary.test.mjs` | category phrases and their order, singular/plural, `×N` list for other tools, mcp name shortening, thinking threshold, `1m`/`2m 5s` durations, worked-time fallback, the summary band (marker, rule, blank lines), one summary per run, replay counts |
+| `layout.test.mjs` | widths 1…200 for live/summary/fallback rows, the rule spanning each width, the one-column band without a rule, zero and negative widths, ellipsis cut, ANSI styling not inflating the measured width |
 | `state.test.mjs` | `agent_before_settle` / `agent_settled` persistence, settle idempotency, new prompt vs custom-message runs, `agent_start` reopening, `message_end` counting and dedupe, `session_start`/`session_shutdown` resets, replay of a whole branch |
 | `ticker.test.mjs` | the elapsed-seconds timer: arming, advancing, partial results, missing `requestRender`, stopping when the call finishes or the run settles, per-call restart, recorded duration, a finished row staying put without repaints |
 | `thinking.test.mjs` | hidden-thinking placeholder removal, blank-line cleanup, thinking-only messages, label-driven matching, behaviour when compact tools are off |

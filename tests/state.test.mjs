@@ -90,9 +90,9 @@ test("a user prompt opens a new run and closes the previous one", async () => {
 	first.updateResult(toolResult());
 	second.updateResult(toolResult());
 	const rows = box.rows();
-	assert.equal(rows.length, 2, "one summary per run");
+	assert.equal(rows.length, 4, "one summary band per run");
 	assert.match(rows[0], /read 1 file/);
-	assert.match(rows[1], /ran 1 shell command/);
+	assert.match(rows[2], /ran 1 shell command/);
 });
 
 test("a custom message continues the same run instead of resetting it", async () => {
@@ -104,7 +104,7 @@ test("a custom message continues the same run instead of resetting it", async ()
 	await emit("agent_before_settle", {}, { ui });
 
 	const row = boxFor(tool("read", "c-2", { path: "/work/project/a.ts" })).rows()[0];
-	assert.equal(row.trim(), "read 1 file, ran 1 shell command", "counts from both segments survive");
+	assert.equal(row.trim(), "○ read 1 file, ran 1 shell command", "counts from both segments survive");
 });
 
 test("agent_start reopens a settled run so the summary keeps following the newest call", async () => {
@@ -114,7 +114,7 @@ test("agent_start reopens a settled run so the summary keeps following the newes
 	const box = tree();
 	const finished = box.add(tool("bash", "re-1", { command: "ls" }));
 	finished.updateResult(toolResult());
-	assert.equal(box.rows().length, 1);
+	assert.equal(box.rows().length, 2, "summary line and its rule");
 	assert.match(box.rows()[0], /ran 1 shell command/);
 
 	await emit("agent_start", {}, { ui });
@@ -134,7 +134,7 @@ test("counts are taken from message_end exactly once per tool call", async () =>
 	await emit("message_end", assistantWith([["d-1", "bash"], ["d-2", "bash"]]), { ui });
 	await emit("message_end", assistantWith([["d-1", "bash"], ["d-2", "bash"]]), { ui });
 	await emit("agent_before_settle", {}, { ui });
-	assert.equal(boxFor(tool("bash", "d-2", { command: "ls" })).rows()[0].trim(), "ran 2 shell commands");
+	assert.equal(boxFor(tool("bash", "d-2", { command: "ls" })).rows()[0].trim(), "○ ran 2 shell commands");
 });
 
 test("non-assistant messages do not add counts", async () => {
@@ -143,7 +143,7 @@ test("non-assistant messages do not add counts", async () => {
 	await emit("message_end", { message: { role: "user", content: [{ type: "text", text: "hi" }] } }, { ui });
 	await emit("agent_before_settle", {}, { ui });
 	const row = boxFor(tool("bash", "z-9", { command: "true" })).rows()[0].trim();
-	assert.match(row, /^Worked for \d+s$/, row);
+	assert.match(row, /^○ Worked for \d+s$/, row);
 });
 
 test("session_start resets live state and rebuilds runs from the branch", async () => {
@@ -190,8 +190,8 @@ test("a replayed session shows the same summary from the branch", async () => {
 	read.updateResult(toolResult());
 	bash.updateResult(toolResult());
 	const rows = box.rows();
-	assert.equal(rows.length, 1, "replay shows exactly one summary row");
-	assert.equal(rows[0].trim(), "Thought for 11s, read 1 file, ran 1 shell command");
+	assert.equal(rows.length, 2, "replay shows exactly one summary band");
+	assert.equal(rows[0].trim(), "○ Thought for 11s, read 1 file, ran 1 shell command");
 });
 
 test("replay keeps runs separated by user messages", async () => {
@@ -208,9 +208,9 @@ test("replay keeps runs separated by user messages", async () => {
 	box.add(tool("read", "b-1", { path: "/work/project/a.ts" })).updateResult(toolResult());
 	box.add(tool("bash", "b-2", { command: "ls" })).updateResult(toolResult());
 	const rows = box.rows();
-	assert.equal(rows.length, 2);
+	assert.equal(rows.length, 4);
 	assert.match(rows[0], /read 1 file/);
-	assert.match(rows[1], /ran 1 shell command/);
+	assert.match(rows[2], /ran 1 shell command/);
 });
 
 test("a session without a readable branch still loads", async () => {

@@ -540,9 +540,35 @@ function liveRow(st: PatchState, component: any, width: number): string[] {
 	return ["", ...lines.map((line) => truncateToWidth(line, width, "…"))];
 }
 
+/**
+ * Marker of the summary band. Deliberately not the tool-row bullet: a call row
+ * reports what is happening, the summary reports what happened.
+ */
+const SUMMARY_MARKER = "○";
+
+/**
+ * Full-width rule closing the summary band. The rule owns its line, so it is
+ * sized to the render width instead of going through the summary's truncation:
+ * one column too many wraps the whole transcript in a narrow terminal.
+ */
+function summaryRule(style: Styler, width: number): string | null {
+	const ruleWidth = width - ROW_PAD.length;
+	if (ruleWidth < 1) return null;
+	return `${ROW_PAD}${style.fg("border", "─".repeat(ruleWidth))}`;
+}
+
+/**
+ * The settled run as a band: a gap, the summary line, and a full-width rule.
+ * The gap below the band is not drawn here: the answer's own component opens
+ * with a blank line, and a second one would leave two empty rows under the rule.
+ */
 function summaryRow(st: PatchState, run: Run, width: number): string[] {
-	const line = truncateToWidth(`${ROW_PAD}${styler(st).fg("muted", summaryText(run))}`, width, "…");
-	return ["", line];
+	const style = styler(st);
+	const head = `${ROW_PAD}${style.fg("dim", SUMMARY_MARKER)} ${style.fg("muted", summaryText(run))}`;
+	const rule = summaryRule(style, width);
+	const band = [truncateToWidth(head, width, "…")];
+	if (rule) band.push(rule);
+	return ["", ...band];
 }
 
 function fallbackRow(component: any, width: number): string[] {

@@ -4,13 +4,14 @@ Claude Code-style tool output for [Pi](https://github.com/earendil-works/pi). Wh
 the transcript shows a single line with what is happening right now and how long it has been
 running. The line stays when the call finishes — now carrying a green check — and is replaced by the
 next call, so a burst of short commands never leaves a blank gap. When the turn settles, the line
-collapses into one summary above the answer.
+collapses into one summary band above the answer.
 
 ```text
  ● Running npm · 4s
    └ $ npm view hunk version 2>&1 | head -5
 
- Thought for 11s, searched for 2 patterns, read 3 files, ran 5 shell commands, spawned 2 agents
+ ○ Thought for 11s, searched for 2 patterns, read 3 files, ran 5 shell commands, spawned 2 agents
+ ─────────────────────────────────────────────────────────────────────────────────────────────
 ```
 
 Display only: model messages, tool results and the session transcript are never touched.
@@ -58,8 +59,13 @@ settles: the summary needs only its own gap.
 **When the turn settles** — the line collapses into the run's summary:
 
 ```text
- Thought for 15s, read 3 files, edited 1 file, ran 27 shell commands, used 6 todos, spawned 5 agents
+ ○ Thought for 15s, read 3 files, edited 1 file, ran 27 shell commands, used 6 todos, spawned 5 agents
+ ───────────────────────────────────────────────────────────────────────────────────────────────
 ```
+
+The `○` marker is deliberately not the `●` of a call row, and the full-width rule closes the band,
+so the answer visibly starts after it instead of under one more dim activity line. Narrow terminals
+drop the rule rather than wrap it.
 
 Phrases appear in a fixed order: thinking, search, read, edit, shell, agents, other tools.
 Durations switch to minutes (`Thought for 2m 5s`), and `Worked for Ns` is used when a run has
@@ -102,7 +108,7 @@ when the elapsed timer arms and fires, and what a settle persisted.
 ## Development
 
 ```bash
-npm test        # 102 offline tests, no model and no terminal
+npm test        # 105 offline tests, no model and no terminal
 ```
 
 The tests import the extension through `jiti` the same way Pi does, drive lifecycle events through a

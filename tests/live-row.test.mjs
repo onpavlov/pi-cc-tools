@@ -164,7 +164,9 @@ test("a finished call keeps its row until the run settles into its summary", asy
 	assert.equal(box.rows().length, 2, "the finished row stays on screen");
 	// Only the summary ends it.
 	await emit("agent_before_settle", {}, { ui });
-	assert.deepEqual(box.rows(), [" ran 1 shell command"], "the row collapses into the summary");
+	const rows = box.rows();
+	assert.equal(rows.length, 2, "the row collapses into the summary band");
+	assert.equal(rows[0], " ○ ran 1 shell command");
 });
 
 test("a failed call keeps its row with a cross instead of a check", async () => {
@@ -371,9 +373,10 @@ test("the reservation is dropped when the run settles", async () => {
 	assert.equal(box.frame().length, 3, "the open run holds the slot");
 	await emit("agent_before_settle", {}, { ui });
 	const frame = box.frame();
-	assert.equal(frame.length, 2, "the settled summary needs only its own gap");
+	assert.equal(frame.length, 3, "the settled summary needs only its own gap, line and rule");
 	assert.equal(frame[0], "");
 	assert.match(frame[1], /read 1 file/);
+	assert.equal(frame[2].trim(), "─".repeat(frame[2].trim().length), "the band closes with a rule");
 });
 
 test("an expanded tool falls through to the host renderer", async () => {
