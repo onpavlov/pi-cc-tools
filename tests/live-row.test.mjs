@@ -205,6 +205,112 @@ test("setting hideComponent removes the row entirely", async () => {
 	call.hideComponent = false;
 });
 
+test("the reserved slot keeps the frame height steady while the run is open", async () => {
+	await freshRun();
+	const box = tree();
+	const call = box.add(tool("bash", "slot-1", { command: "ls" }));
+	call.markExecutionStarted();
+	assert.equal(box.frame().length, 3, "gap, activity row and command fill the slot");
+
+	call.updateResult(toolResult({ durationMs: 10 }));
+	assert.equal(box.frame().length, 3, "the held row is padded to the slot");
+	await wait(HOLD_MS + 150);
+	assert.deepEqual(box.frame(), ["", "", ""], "the collapsed row leaves a blank slot, not a shorter frame");
+
+	const next = box.add(tool("read", "slot-2", { path: "/work/project/a.ts" }));
+	next.markExecutionStarted();
+	assert.equal(box.frame().length, 3, "the next call takes over the same slot");
+	assert.match(box.rows()[0], /Reading a\.ts/);
+});
+
+test("a short live row still fills the slot", async () => {
+	await freshRun();
+	const box = tree();
+	box.add(tool("grep", "slot-short", { pattern: "hunk", path: "/work/project" })).markExecutionStarted();
+	const frame = box.frame();
+	assert.equal(frame.length, 3, "a row without a command is padded below");
+	assert.match(frame[1], /Searching "hunk"/);
+	assert.equal(frame[2].trim(), "", "the padding sits under the row, never above it");
+});
+
+test("an announced call without a component does not drop the slot", async () => {
+	await freshRun();
+	const box = tree();
+	const first = box.add(tool("bash", "slot-ann-1", { command: "ls" }));
+	first.markExecutionStarted();
+	first.updateResult(toolResult({ durationMs: 10 }));
+	box.text();
+	await wait(HOLD_MS + 150);
+	assert.deepEqual(box.frame(), ["", "", ""]);
+	// The transcript announces the next call before its component exists: the
+	// slot must stay where it is instead of collapsing onto a missing owner.
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id: "slot-ann-2", name: "grep", arguments: {} }] } },
+		{ ui },
+	);
+	assert.equal(box.frame().length, 3, "the previous call keeps the slot until the new row exists");
+});
+
+test("a call whose component appears before it is announced keeps the slot", async () => {
+	await freshRun();
+	const box = tree();
+	const first = box.add(tool("bash", "slot-next-1", { command: "ls" }));
+	first.markExecutionStarted();
+	box.text(); // the row is drawn, which opens its dwell window
+	first.updateResult(toolResult({ durationMs: 10 }));
+	// The transcript announces the call, so the run's newest known call is it.
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id: "slot-next-1", name: "bash", arguments: {} }] } },
+		{ ui },
+	);
+	await wait(HOLD_MS + 150);
+	assert.deepEqual(box.frame(), ["", "", ""], "the finished call holds the slot");
+
+	// Pi creates the next call's component while the model still streams it, so
+	// the component exists before the call is announced or starts.
+	const next = box.add(tool("bash", "slot-next-2", { command: "npm test" }));
+	const frame = box.frame();
+	assert.equal(frame.length, 3, "the slot moves to the new component at once");
+	assert.match(frame[1], /Running npm/, "the streamed call is already the row");
+	assert.equal(next.executionStarted, false);
+});
+
+test("only one call reserves the slot at a time", async () => {
+	await freshRun();
+	const box = tree();
+	const first = box.add(tool("bash", "slot-one-1", { command: "ls" }));
+	first.markExecutionStarted();
+	first.updateResult(toolResult({ durationMs: 10 }));
+	box.text();
+	const second = box.add(tool("grep", "slot-one-2", { pattern: "hunk" }));
+	second.markExecutionStarted();
+	// The held row yields at once: the successor is already queued behind it.
+	const frame = box.frame();
+	assert.equal(frame.length, 3, "the predecessor does not keep a slot of its own");
+	assert.match(frame[1], /Searching "hunk"/, "the newest call owns the slot");
+});
+
+test("the reservation is dropped when the run settles", async () => {
+	await freshRun();
+	const box = tree();
+	const call = box.add(tool("read", "slot-settle", { path: "/work/project/a.ts" }));
+	call.markExecutionStarted();
+	call.updateResult(toolResult({ durationMs: 2000 }));
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id: "slot-settle", name: "read", arguments: {} }] } },
+		{ ui },
+	);
+	assert.equal(box.frame().length, 3, "the open run holds the slot");
+	await emit("agent_before_settle", {}, { ui });
+	const frame = box.frame();
+	assert.equal(frame.length, 2, "the settled summary needs only its own gap");
+	assert.equal(frame[0], "");
+	assert.match(frame[1], /read 1 file/);
+});
+
 test("an expanded tool falls through to the host renderer", async () => {
 	await freshRun();
 	const box = tree();

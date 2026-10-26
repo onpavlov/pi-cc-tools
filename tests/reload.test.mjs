@@ -125,4 +125,17 @@ test("a reload rebuilds the thinking filter as well", async () => {
 	assert.equal(filterAfter.originalRender, filterBefore.originalRender, "no filter is nested in another");
 });
 
+test("a reload rebuilds parent tracking without stacking", async () => {
+	const TRACKING = Symbol.for("cc-tools:parent-tracking:v1");
+	const containerProto = Object.getPrototypeOf(host.ToolExecutionComponent.prototype);
+	const trackingBefore = containerProto[TRACKING];
+	assert.ok(trackingBefore?.originalAddChild, "the tracker records the host addChild");
+
+	await evaluateAgain(readFileSync(EXTENSION_PATH, "utf8"));
+
+	const trackingAfter = containerProto[TRACKING];
+	assert.notEqual(trackingAfter, trackingBefore, "the tracker closure is replaced");
+	assert.equal(trackingAfter.originalAddChild, trackingBefore.originalAddChild, "no addChild is nested in another");
+});
+
 await runTests("reload");

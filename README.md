@@ -46,6 +46,12 @@ flashing past; the next call replaces the line at once, without waiting the wind
 the rows stay hidden until the turn settles, so the model's thinking never sits under a stale
 "Running" line.
 
+The activity area holds a fixed three-line slot for as long as the run is open: the gap above the
+row, the row itself, and its command line. A row that goes away — a call that finished, a pause
+between calls — leaves the slot blank instead of shrinking it, so nothing below (the streaming
+answer included) jumps while tools come and go. The reservation is dropped when the turn settles:
+the summary needs only its own gap.
+
 **When the turn settles** — the run's summary, placed on its last call:
 
 ```text
@@ -93,7 +99,7 @@ when the elapsed timer arms and fires, and what a settle persisted.
 ## Development
 
 ```bash
-npm test        # 94 offline tests, no model and no terminal
+npm test        # 101 offline tests, no model and no terminal
 ```
 
 The tests import the extension through `jiti` the same way Pi does, drive lifecycle events through a
@@ -115,8 +121,10 @@ tests/                         offline renderer and lifecycle tests
 
 ## Known limitations
 
-- For one frame, a brand-new call may still show the previous row: a component joins its run only
-  when it renders for the first time.
+- The first call of a run still adds the slot's three lines: nothing before it exists to reserve the
+  space. From the second call on the height stays put.
+- For one frame, a brand-new call may still show the previous row's data: a component joins its run
+  only when it renders for the first time. The reserved slot itself is handed over without doubling.
 - Thinking time is measured from streamed reasoning; providers that send none report no
   `Thought for` line.
 - Expanded calls (`Ctrl+O`) always use Pi's own renderer, so they ignore the summary styling.

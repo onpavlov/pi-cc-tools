@@ -28,14 +28,14 @@ CC_TOOLS_EXTENSION=/tmp/variant.ts npm test
 
 | File | Covers |
 | --- | --- |
-| `live-row.test.mjs` | verb/detail per tool, command line, program extraction, path shortening, newest-call-only rule, hold window after a fast finish, `hideComponent`, expanded fallback, output never leaking into the live row |
+| `live-row.test.mjs` | verb/detail per tool, command line, program extraction, path shortening, newest-call-only rule, hold window after a fast finish, `hideComponent`, expanded fallback, output never leaking into the live row, the fixed-height activity slot and its hand-over between calls |
 | `summary.test.mjs` | category phrases and their order, singular/plural, `×N` list for other tools, mcp name shortening, thinking threshold, `1m`/`2m 5s` durations, worked-time fallback, one summary per run, replay counts |
 | `layout.test.mjs` | widths 1…200 for live/summary/fallback rows, zero and negative widths, ellipsis cut, ANSI styling not inflating the measured width |
 | `state.test.mjs` | `agent_before_settle` / `agent_settled` persistence, settle idempotency, new prompt vs custom-message runs, `agent_start` reopening, `message_end` counting and dedupe, `session_start`/`session_shutdown` resets, replay of a whole branch |
 | `ticker.test.mjs` | the elapsed-seconds timer: arming, advancing, partial results, missing `requestRender`, stopping on settle, per-call restart, recorded duration, the held row collapsing when its window ends |
 | `thinking.test.mjs` | hidden-thinking placeholder removal, blank-line cleanup, thinking-only messages, label-driven matching, behaviour when compact tools are off |
 | `commands.test.mjs` | `/cc-tools on\|off\|toggle\|reveal\|hide`, invalid option, click-to-reveal, clicks that belong to the host |
-| `reload.test.mjs` | `/reload` semantics: an older copy's wrapper switched off, a repeated install not stacking, a reload swapping closures while keeping counters, the new code rendering immediately, the thinking filter rebuilding |
+| `reload.test.mjs` | `/reload` semantics: an older copy's wrapper switched off, a repeated install not stacking, a reload swapping closures while keeping counters, the new code rendering immediately, the thinking filter rebuilding, parent tracking rebuilt |
 | `robustness.test.mjs` | legacy patch state disabled on load, double install (`/reload`) not double-wrapping, orphan components, missing `toolCallId`, missing theme, throwing lifecycle context, opt-in tracing |
 
 ## Adding a test
@@ -92,3 +92,8 @@ Each of these was a real bug; the test named in brackets fails if it comes back.
 | Timer jumping back from `1s` to `0s` mid-call | `ticker: a partial result carrying durationMs 0 does not reset the timer` |
 | Summary counting subagent/nested calls (`spawned 10 agents` for 5) | `summary: calls the transcript never announced are not counted` |
 | `Running (Macintosh;` for `UA="Mozilla/5.0 (Macintosh; …" cmd` | `live-row: the program name skips env assignments…` |
+| Output jumping while tools come and go at the transcript end | `live-row: the reserved slot keeps the frame height steady…`, `live-row: a short live row still fills the slot` |
+| Two rows holding the activity slot at once when a call is replaced | `live-row: only one call reserves the slot at a time`, `live-row: an announced call without a component does not drop the slot` |
+| The slot vanishing while the model streams the next call's arguments | `live-row: a call whose component appears before it is announced keeps the slot` |
+| The reserved slot surviving into the settled summary | `live-row: the reservation is dropped when the run settles` |
+| Parent tracking wrapped twice after `/reload` | `reload: a reload rebuilds parent tracking without stacking` |
