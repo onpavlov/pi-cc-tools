@@ -1,12 +1,11 @@
 /**
- * The live row shown while a tool runs: verb, detail, command, and the rule
- * that only the newest still-executing call is on screen.
+ * The rows shown while a run is live: verb, detail, command, a duration, and the
+ * check or cross a finished call carries.
  */
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import {
 	HIDDEN_OUTPUT,
-	HOLD_MS,
 	createPi,
 	loadExtension,
 	makeTool,
@@ -31,6 +30,9 @@ async function freshRun(options = {}) {
 }
 
 const plainText = (component, width = 100) => {
+	// A row is drawn once the call runs: a bare component is still waiting for
+	// its streamed arguments, so the line has not been handed over yet.
+	component.markExecutionStarted();
 	const box = tree();
 	box.add(component);
 	return box.text(width);
@@ -126,13 +128,14 @@ test("unknown tools use the tool name and the most descriptive argument", async 
 	assert.ok(keysOnly.includes(" ● mystery alpha, beta"), keysOnly);
 });
 
-test("the newest executing call replaces the previous one", async () => {
+test("the next call takes the line over from a finished one", async () => {
 	await freshRun();
 	const box = tree();
 	const first = box.add(tool("bash", "seq-1", { command: "npm install" }));
 	first.markExecutionStarted();
 	first.updateResult(toolResult());
 	box.text(); // a component is attached to its run on its first render
+	assert.match(box.rows()[0], / ● Running npm · 4s ✓$/);
 
 	const second = box.add(tool("grep", "seq-2", { pattern: "hunk", path: "/tmp/project" }));
 	second.markExecutionStarted();
@@ -142,56 +145,85 @@ test("the newest executing call replaces the previous one", async () => {
 	assert.match(rows[0], / ● Searching "hunk"/);
 });
 
-test("a finished call keeps its row briefly, then leaves while the model thinks", async () => {
+test("a finished call keeps its row until the run settles into its summary", async () => {
 	await freshRun();
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id: "solo-1", name: "bash", arguments: {} }] } },
+		{ ui },
+	);
 	const box = tree();
 	const call = box.add(tool("bash", "solo-1", { command: "ls" }));
 	call.markExecutionStarted();
 	assert.match(box.rows()[0], /Running ls/);
 	call.updateResult(toolResult({ durationMs: 4200 }));
-	// The call was on screen for a moment only: the row is held so it can be read.
-	assert.match(box.rows()[0], /Running ls · 4s/);
-	await wait(HOLD_MS + 150);
-	assert.deepEqual(box.rows(), [], "nothing is running, so the held row collapses");
+	// The call is done: the row keeps its duration and gains a green check, and
+	// the model's thinking no longer blanks it out.
+	assert.match(box.rows()[0], /Running ls · 4s ✓$/);
+	await wait(50);
+	assert.equal(box.rows().length, 2, "the finished row stays on screen");
+	// Only the summary ends it.
+	await emit("agent_before_settle", {}, { ui });
+	assert.deepEqual(box.rows(), [" ran 1 shell command"], "the row collapses into the summary");
 });
 
-test("an instantly failed call shows its row briefly, then stops claiming to run", async () => {
+test("a failed call keeps its row with a cross instead of a check", async () => {
 	await freshRun();
 	const box = tree();
 	const call = box.add(tool("bash", "failed-1", { command: "UA=\"x y\" for u in \\" }));
 	call.markExecutionStarted();
 	call.updateResult(toolResult({ isError: true, durationMs: 82 }));
-	assert.match(box.rows()[0], /Running/, "the row is still readable right after the failure");
-	await wait(HOLD_MS + 150);
-	assert.deepEqual(box.rows(), [], "a call that failed instantly must not linger");
+	assert.match(box.rows()[0], /Running for · 0s ✗$/);
+	await wait(50);
+	assert.match(box.rows()[0], /✗$/, "a failed call must not linger as done");
 });
 
-test("a new call replaces a held row without waiting out the dwell", async () => {
+test("the next call replaces a finished row without a blank frame", async () => {
 	await freshRun();
 	const box = tree();
 	// A command that ends before it can be read keeps its row...
 	const first = box.add(tool("bash", "hold-1", { command: "true" }));
 	first.markExecutionStarted();
 	first.updateResult(toolResult({ durationMs: 10 }));
-	assert.match(box.rows()[0], /Running true/);
-	// ...but the next call takes the line over immediately.
+	assert.match(box.rows()[0], /Running true · 0s ✓$/);
+	// ...and the next call takes the line over, so nothing blanks out between them.
 	const second = box.add(tool("bash", "hold-2", { command: "sleep 1" }));
 	second.markExecutionStarted();
 	box.text(); // the frame in which a new call appears may still show the old row
 	const rows = box.rows();
 	assert.equal(rows.filter((row) => row.includes("Running")).length, 1, "only one activity row at a time");
-	assert.match(rows[0], /Running sleep/);
+	assert.match(rows[0], /Running sleep · 0s$/);
 });
 
-test("a call watched for longer than the dwell disappears at once", async () => {
-	await freshRun();
-	const box = tree();
-	const call = box.add(tool("bash", "watch-1", { command: "sleep 9" }));
-	call.markExecutionStarted();
-	box.text();
-	await wait(HOLD_MS + 150);
-	call.updateResult(toolResult({ durationMs: 4200 }));
-	assert.deepEqual(box.rows(), [], "the row was on screen long enough already");
+test("the check and the cross use the theme's success and error tokens", async () => {
+	const seen = [];
+	const themed = makeUi({
+		theme: {
+			fg(token, text) {
+				seen.push(`${token}:${text}`);
+				return text;
+			},
+			bold: (text) => text,
+			italic: (text) => text,
+		},
+	});
+	const themedTool = makeTool(themed, { cwd: "/work/project" });
+	await emit("session_start", {}, { ui: themed, sessionManager: { getBranch: () => [] } });
+	await emit("before_agent_start", { messageType: "user" }, { ui: themed });
+	const okBox = tree();
+	const ok = okBox.add(themedTool("bash", "mark-ok", { command: "true" }));
+	ok.markExecutionStarted();
+	ok.updateResult(toolResult());
+	okBox.text();
+	assert.ok(seen.includes("success:✓"), `success token used: ${seen.join(", ")}`);
+
+	await emit("before_agent_start", { messageType: "user" }, { ui: themed });
+	const badBox = tree();
+	const bad = badBox.add(themedTool("bash", "mark-bad", { command: "false" }));
+	bad.markExecutionStarted();
+	bad.updateResult(toolResult({ isError: true }));
+	badBox.text();
+	assert.ok(seen.includes("error:✗"), `error token used: ${seen.join(", ")}`);
 });
 
 test("setting hideComponent removes the row entirely", async () => {
@@ -213,9 +245,12 @@ test("the reserved slot keeps the frame height steady while the run is open", as
 	assert.equal(box.frame().length, 3, "gap, activity row and command fill the slot");
 
 	call.updateResult(toolResult({ durationMs: 10 }));
-	assert.equal(box.frame().length, 3, "the held row is padded to the slot");
-	await wait(HOLD_MS + 150);
-	assert.deepEqual(box.frame(), ["", "", ""], "the collapsed row leaves a blank slot, not a shorter frame");
+	assert.equal(box.frame().length, 3, "the finished row keeps the slot");
+	assert.match(box.frame()[1], /Running ls · 0s ✓$/, "the row now carries its check");
+	// There is no dwell window: the row stays until the next call replaces it.
+	await wait(50);
+	assert.equal(box.frame().length, 3, "the slot never shrinks while the run is open");
+	assert.match(box.frame()[1], /Running ls · 0s ✓$/);
 
 	const next = box.add(tool("read", "slot-2", { path: "/work/project/a.ts" }));
 	next.markExecutionStarted();
@@ -240,16 +275,16 @@ test("an announced call without a component does not drop the slot", async () =>
 	first.markExecutionStarted();
 	first.updateResult(toolResult({ durationMs: 10 }));
 	box.text();
-	await wait(HOLD_MS + 150);
-	assert.deepEqual(box.frame(), ["", "", ""]);
+	assert.match(box.frame()[1], /Running ls · 0s ✓$/, "the finished row holds the slot");
 	// The transcript announces the next call before its component exists: the
-	// slot must stay where it is instead of collapsing onto a missing owner.
+	// row must stay where it is instead of collapsing onto a missing owner.
 	await emit(
 		"message_end",
 		{ message: { role: "assistant", content: [{ type: "toolCall", id: "slot-ann-2", name: "grep", arguments: {} }] } },
 		{ ui },
 	);
 	assert.equal(box.frame().length, 3, "the previous call keeps the slot until the new row exists");
+	assert.match(box.frame()[1], /Running ls · 0s ✓$/, "the announced call does not blank the row");
 });
 
 test("a call whose component appears before it is announced keeps the slot", async () => {
@@ -257,7 +292,7 @@ test("a call whose component appears before it is announced keeps the slot", asy
 	const box = tree();
 	const first = box.add(tool("bash", "slot-next-1", { command: "ls" }));
 	first.markExecutionStarted();
-	box.text(); // the row is drawn, which opens its dwell window
+	box.text(); // the row is drawn
 	first.updateResult(toolResult({ durationMs: 10 }));
 	// The transcript announces the call, so the run's newest known call is it.
 	await emit(
@@ -265,16 +300,46 @@ test("a call whose component appears before it is announced keeps the slot", asy
 		{ message: { role: "assistant", content: [{ type: "toolCall", id: "slot-next-1", name: "bash", arguments: {} }] } },
 		{ ui },
 	);
-	await wait(HOLD_MS + 150);
-	assert.deepEqual(box.frame(), ["", "", ""], "the finished call holds the slot");
+	assert.match(box.frame()[1], /Running ls · 0s ✓$/, "the finished call holds the slot");
 
-	// Pi creates the next call's component while the model still streams it, so
-	// the component exists before the call is announced or starts.
-	const next = box.add(tool("bash", "slot-next-2", { command: "npm test" }));
-	const frame = box.frame();
-	assert.equal(frame.length, 3, "the slot moves to the new component at once");
-	assert.match(frame[1], /Running npm/, "the streamed call is already the row");
+	// Pi creates the next call's component while the model still streams its
+	// arguments. The line must keep the finished call instead of flashing an
+	// empty `Running… · 0s` and then growing the command chunk by chunk.
+	const next = box.add(tool("bash", "slot-next-2", { command: "" }));
+	assert.match(box.frame()[1], /Running ls · 0s ✓$/, "the streamed call does not blank the row");
+	next.updateArgs({ command: "npm te" });
+	assert.match(box.frame()[1], /Running ls · 0s ✓$/, "partial arguments do not take the line over");
 	assert.equal(next.executionStarted, false);
+
+	// Once the arguments are complete the row swaps in one step.
+	next.updateArgs({ command: "npm test" });
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id: "slot-next-2", name: "bash", arguments: {} }] } },
+		{ ui },
+	);
+	const frame = box.frame();
+	assert.equal(frame.length, 3, "the slot does not change height on the swap");
+	assert.match(frame[1], /Running npm · 0s$/, "the full command appears at once");
+	assert.match(frame[2], /└ \$ npm test$/);
+});
+
+test("the first call draws nothing while its arguments are still streaming", async () => {
+	await freshRun();
+	const box = tree();
+	const call = box.add(tool("bash", "first-stream", { command: "" }));
+	assert.deepEqual(box.frame(), [], "no empty row appears before the call is known");
+	call.updateArgs({ command: "npm test" });
+	assert.deepEqual(box.frame(), [], "partial arguments still draw nothing");
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id: "first-stream", name: "bash", arguments: {} }] } },
+		{ ui },
+	);
+	const frame = box.frame();
+	assert.equal(frame.length, 3, "the row arrives together with its whole command");
+	assert.match(frame[1], /Running npm · 0s$/);
+	assert.match(frame[2], /└ \$ npm test$/);
 });
 
 test("only one call reserves the slot at a time", async () => {

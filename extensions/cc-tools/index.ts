@@ -3,14 +3,16 @@
  *
  * While a run is going, every tool row except the newest one is hidden, so the
  * transcript shows a single line: what pi is doing right now plus its command.
- * The activity area keeps a fixed height from the first call to the settle —
- * an empty slot when no row is drawn — because the transcript follows the
- * terminal bottom and a line appearing or disappearing there scrolls the whole
- * screen. When the run settles, the slot is dropped and all tool rows collapse
- * into one summary line ("Thought for 4s, searched for 1 pattern, ran 3 shell
- * commands") that sits right above the final answer. Ctrl+O (or a click on the
- * summary) reveals the rows again; `/cc-tools on|off|toggle|reveal|hide`
- * controls the renderer.
+ * A finished call keeps that row and gains a green check until the next call
+ * takes the line over, so a burst of short commands never leaves a blank gap or
+ * a blinking line. The activity area keeps a fixed height from the first call
+ * to the settle — an empty slot when no row is drawn — because the transcript
+ * follows the terminal bottom and a line appearing or disappearing there
+ * scrolls the whole screen. When the run settles, the slot is dropped and the
+ * row collapses into one summary line ("Thought for 4s, searched for 1 pattern,
+ * ran 3 shell commands") that sits right above the final answer. Ctrl+O (or a
+ * click on the summary) reveals the rows again;
+ * `/cc-tools on|off|toggle|reveal|hide` controls the renderer.
  *
  * Nothing here touches model messages or the session transcript semantics; the
  * only persisted data is a `cc-tools-summary` custom entry used to render the
@@ -31,7 +33,7 @@ const THINKING_FILTER = Symbol.for("cc-tools:thinking-filter:v1");
 const PARENT = Symbol.for("cc-tools:parent:v1");
 const PARENT_TRACKING = Symbol.for("cc-tools:parent-tracking:v1");
 /** Bumped when the patch layout changes, so a reload can migrate older state. */
-const PATCH_VERSION = 2;
+const PATCH_VERSION = 3;
 /** New object on every module evaluation: tells a reload from a repeated install. */
 const LOAD_TOKEN = Symbol("cc-tools-load");
 const SUMMARY_ENTRY = "cc-tools-summary";
@@ -40,12 +42,6 @@ const SUMMARY_ENTRY = "cc-tools-summary";
 const ANSI = new RegExp("\\x1b\\[[0-9;?]*[ -/]*[@-~]|\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)", "g");
 /** Left inset of the activity and summary rows, matching the answer text column. */
 const ROW_PAD = " ";
-/**
- * Minimum time a live row stays on screen. A call that ends sooner than this
- * keeps its row for the rest of the window instead of blinking out, so a fast
- * tool is still readable; a call that replaced it hides it at once.
- */
-const LIVE_DWELL_MS = 900;
 /**
  * Height the activity area keeps while a run is going: the gap above the row,
  * the row, and its command line. The transcript follows the terminal bottom, so
@@ -121,12 +117,8 @@ type PatchState = {
 	thinkingStartAt: number;
 	/** One-shot timer that keeps the elapsed seconds moving while a tool runs. */
 	ticker?: ReturnType<typeof setTimeout>;
-	/** toolCallId -> when its live row first appeared: the start of its dwell window. */
-	liveShownAt?: Map<string, number>;
-	/** Calls whose row already collapsed at settle: never shown as live again. */
+	/** Calls whose rows already collapsed at settle: never drawn as a row again. */
 	settled?: Set<string>;
-	/** One-shot timer that repaints when a finished call's held row is due to collapse. */
-	dwell?: ReturnType<typeof setTimeout>;
 	/** Last time a live row was actually drawn, and whether it was still running. */
 	lastLiveAt?: number;
 	liveRunning?: boolean;
@@ -359,26 +351,6 @@ function stopTicker(st: PatchState): void {
 	st.ticker = undefined;
 }
 
-function stopDwell(st: PatchState): void {
-	if (st.dwell === undefined) return;
-	clearTimeout(st.dwell);
-	st.dwell = undefined;
-}
-
-/** Ask for one repaint when the held row is due to collapse; that render drops it. */
-function armDwell(st: PatchState, ui: any, remainingMs: number): void {
-	stopDwell(st);
-	if (typeof ui?.requestRender !== "function") return;
-	const timer = setTimeout(() => {
-		st.dwell = undefined;
-		trace("D fire");
-		ui.requestRender();
-	}, remainingMs);
-	// A pending hold must never keep the process alive on its own.
-	timer.unref?.();
-	st.dwell = timer;
-}
-
 /**
  * Pi repaints the transcript only when something changes, so a tool that runs
  * without emitting output would freeze its elapsed seconds. Re-request a render
@@ -456,11 +428,6 @@ function runOf(st: PatchState, component: any): Run | null {
 	return run;
 }
 
-/**
- * The row to draw for this run. Chosen by tool-call id and execution state, not
- * by object identity: pi recreates components on tree navigation, compaction,
- * and resume, and a remembered instance would hide every row.
- */
 /** The newest call of the run that is still executing: it owns the activity row. */
 function runningToolId(run: Run | null | undefined): string | undefined {
 	const progress = run?.progress;
@@ -473,46 +440,62 @@ function runningToolId(run: Run | null | undefined): string | undefined {
 	return undefined;
 }
 
-/** The newest call the transcript already has a component for. */
-function newestRenderedId(run: Run): string | undefined {
-	const progress = run.progress;
-	if (!progress) return undefined;
-	for (let index = run.toolIds.length - 1; index >= 0; index--) {
-		const id = run.toolIds[index];
-		if (progress.has(id)) return id;
-	}
-	return undefined;
-}
-
 /** The summary belongs to the newest announced call; without one, to the last seen. */
 function summaryOwner(run: Run): string | undefined {
 	return run.lastToolId ?? run.lastSeenId;
 }
 
 /**
- * The call that holds the reserved slot: the executing one, else the newest
- * call that has a component. Pi creates the next call's component while the
- * model is still streaming it — long before the call is announced or starts —
- * and the slot has to move to that component at once. Leaving it on an older
- * announced call would drop it: the old row yields to its successor while the
- * successor is not the owner yet, and nothing fills the slot for those frames.
+ * Whether a call can already draw a meaningful row. Pi creates the component
+ * while the model is still streaming the call's arguments — the command text
+ * would grow chunk by chunk, and the row would flash empty first — so the line
+ * is handed over only once the call is announced (its arguments are complete)
+ * or it actually runs. A component pi recreates on navigation is announced even
+ * when it never saw execution start, so it still owns the line.
  */
-function slotOwner(run: Run): string | undefined {
-	return runningToolId(run) ?? newestRenderedId(run);
+function rowReady(st: PatchState, component: any): boolean {
+	if (component.argsComplete === true || component.executionStarted === true) return true;
+	if (component.result != null) return true;
+	return st.announced.has(String(component.toolCallId));
+}
+
+/** The newest call the transcript already has a component for and can draw. */
+function newestReadyId(st: PatchState, run: Run): string | undefined {
+	const progress = run.progress;
+	if (!progress) return undefined;
+	for (let index = run.toolIds.length - 1; index >= 0; index--) {
+		const id = run.toolIds[index];
+		const state = progress.get(id);
+		if (!state) continue;
+		if (st.announced.has(String(id)) || state.started || state.done) return id;
+	}
+	return undefined;
+}
+
+/**
+ * The call that holds the row: the executing one, else the newest call that can
+ * already be drawn. A call whose arguments are still streaming does not take
+ * the line over yet, so the finished row stays put instead of flashing an empty
+ * `Running… · 0s` and then growing its command text.
+ */
+function slotOwner(st: PatchState, run: Run): string | undefined {
+	return runningToolId(run) ?? newestReadyId(st, run);
 }
 
 /**
  * The newest drawable tool row after this one in the transcript, if any. Pi
  * appends components in order and a successor renders after this row in the
- * same frame, so the two must never reserve a slot each.
+ * same frame, so the two must never reserve a slot each. A successor whose row
+ * is not ready yet does not count: the current row keeps the slot.
  */
-function successorRow(component: any): any {
+function successorRow(st: PatchState, component: any): any {
 	const children = component[PARENT]?.children;
 	if (!Array.isArray(children)) return undefined;
 	const own = children.lastIndexOf(component);
 	for (let index = children.length - 1; index > own; index--) {
 		const sibling = children[index];
-		if (sibling instanceof ToolExecutionComponent && !(sibling as any).hideComponent) return sibling;
+		if (!(sibling instanceof ToolExecutionComponent) || (sibling as any).hideComponent) continue;
+		if (rowReady(st, sibling)) return sibling;
 	}
 	return undefined;
 }
@@ -529,49 +512,32 @@ function blankSlot(): string[] {
 	return new Array<string>(LIVE_SLOT_LINES).fill("");
 }
 
+/**
+ * The single row of a running run. A finished call keeps it with a check, so
+ * the line is never blank while the model thinks; the next call replaces it.
+ */
 function liveRow(st: PatchState, component: any, width: number): string[] {
 	const style = styler(st);
 	const { verb, detail, command } = describeTool(component);
 	const label = detail ? `${verb} ${detail}` : `${verb}…`;
 	const seconds = elapsedSeconds(st, component);
-	// The row is on screen and has no result yet, so the call is in flight even
-	// if `executionStarted` never reached this component instance.
+	const running = stillRunning(component);
+	// The row is on screen, so the call is in flight even if `executionStarted`
+	// never reached this component instance.
 	st.lastLiveAt = Date.now();
-	st.liveRunning = stillRunning(component);
-	if (st.liveRunning) tickLive(st, component.ui);
+	st.liveRunning = running;
+	if (running) tickLive(st, component.ui);
 	if (st.__ccSeconds !== seconds) {
 		st.__ccSeconds = seconds;
 		trace(`L id=${component.toolCallId} secs=${seconds} res=${component.result ? 1 : 0}`);
 	}
-	const head = `${style.fg("accent", "●")} ${style.fg("toolTitle", label)}${style.fg("dim", ` · ${duration(seconds)}`)}`;
+	// A failed call must not read as a success: the check flips to a cross.
+	const failed = component.result?.isError === true;
+	const marker = running ? "" : ` ${style.fg(failed ? "error" : "success", failed ? "✗" : "✓")}`;
+	const head = `${style.fg("accent", "●")} ${style.fg("toolTitle", label)}${style.fg("dim", ` · ${duration(seconds)}`)}${marker}`;
 	const lines = [`${ROW_PAD}${head}`];
 	if (command) lines.push(`${ROW_PAD}  ${style.fg("dim", "└ $ ")}${style.fg("muted", command)}`);
 	return ["", ...lines.map((line) => truncateToWidth(line, width, "…"))];
-}
-
-/**
- * The row for the newest call: while it runs, and for the remainder of its
- * dwell window right after it finishes. The window opens when the row is first
- * drawn, so a call already on screen for longer than the dwell disappears at
- * once. A call that settled once is never shown again, even if the run is
- * reopened by `agent_start`.
- */
-function liveRows(st: PatchState, component: any, width: number): string[] {
-	const id = String(component.toolCallId);
-	const now = Date.now();
-	if (st.settled?.has(id)) return [];
-	if (!st.liveShownAt) st.liveShownAt = new Map();
-	if (stillRunning(component)) {
-		stopDwell(st);
-		if (!st.liveShownAt.has(id)) st.liveShownAt.set(id, now);
-		return inSlot(liveRow(st, component, width));
-	}
-	const shownAt = st.liveShownAt.get(id) ?? now;
-	st.liveShownAt.set(id, shownAt);
-	const remaining = shownAt + LIVE_DWELL_MS - now;
-	if (remaining <= 0) return [];
-	armDwell(st, component.ui, remaining);
-	return inSlot(liveRow(st, component, width));
 }
 
 function summaryRow(st: PatchState, run: Run, width: number): string[] {
@@ -744,32 +710,30 @@ function installPatch(): PatchState {
 		// Revealed runs keep one compact row per call, like a plain activity log.
 		if (st.revealAll) return fallbackRow(this, width);
 		const run = runOf(st, this);
-		const owner = run && !run.finished ? slotOwner(run) : undefined;
+		const owner = run && !run.finished ? slotOwner(st, run) : undefined;
+		const id = String(this.toolCallId);
+		const settled = st.settled?.has(id) === true;
 		let decision = "no-run";
 		if (run?.finished) decision = this.toolCallId === summaryOwner(run) ? "summary" : "hidden";
-		else if (run) decision = this.toolCallId === owner ? "live" : "hidden";
+		else if (run) decision = settled ? "settled" : this.toolCallId === owner ? "live" : "hidden";
 		const key = `${decision}|${this.result ? 1 : 0}|${this.executionStarted ? 1 : 0}|${run?.finished ? 1 : 0}`;
 		if (this.__ccDecision !== key) {
 			this.__ccDecision = key;
 			if (process.env.PI_CC_TOOLS_DEBUG) {
-				const successor = successorRow(this) ? "next" : "own";
+				const successor = successorRow(st, this) ? "next" : "own";
 				trace(`R id=${this.toolCallId} name=${this.toolName} ${decision} res=${this.result ? 1 : 0} exec=${this.executionStarted ? 1 : 0} fin=${run?.finished ? 1 : 0} owner=${owner} slot=${successor} ui=${typeof this.ui?.requestRender}`);
 			}
 		}
 		if (!run) return fallbackRow(this, width);
 		if (run.finished) return this.toolCallId === summaryOwner(run) ? summaryRow(st, run, width) : [];
-		if (this.toolCallId !== slotOwner(run)) return [];
-		// A finished call must not keep claiming to run while the model thinks:
-		// its held row collapses once the dwell window is over, leaving the slot
-		// blank instead of dropping it — nothing below may move.
-		const rows = liveRows(st, this, width);
-		if (rows.length > 0) {
-			// A finished call's row yields the moment a newer row exists: the next
-			// call replaces it at once instead of drawing beside it for a frame.
-			if (!stillRunning(this) && successorRow(this)) return [];
-			return rows;
-		}
-		return successorRow(this) ? [] : blankSlot();
+		if (this.toolCallId !== slotOwner(st, run)) return [];
+		// A settled row stays collapsed even when a retry reopens the run: it keeps
+		// the slot blank instead of dropping it, so nothing below moves.
+		if (settled) return successorRow(st, this) ? [] : blankSlot();
+		// A finished call's row yields the moment a newer row exists: the next
+		// call replaces it at once instead of drawing beside it for a frame.
+		if (!stillRunning(this) && successorRow(st, this)) return [];
+		return inSlot(liveRow(st, this, width));
 	};
 
 	proto.handleMouse = function (event: any): any {
@@ -836,7 +800,6 @@ export default function (pi: ExtensionAPI) {
 	st.toolStartAt.clear();
 	st.thinkingStartAt = 0;
 	stopTicker(st);
-	stopDwell(st);
 
 	// Every handler body is guarded: a throwing lifecycle hook would otherwise
 	// leave the rows permanently hidden with no summary.
@@ -854,11 +817,9 @@ export default function (pi: ExtensionAPI) {
 		st.live = null;
 		st.announced = new Set();
 		st.toolStartAt.clear();
-		st.liveShownAt = new Map();
 		st.settled = new Set();
 		st.thinkingStartAt = 0;
 		stopTicker(st);
-		stopDwell(st);
 		loadRuns(ctx, st);
 		// The placeholder text is filtered out of the transcript; keeping a stable
 		// label is what lets the filter recognise those lines.
@@ -887,8 +848,6 @@ export default function (pi: ExtensionAPI) {
 		trace(`E before_agent_start (${messageType})`);
 		closeThinking(st);
 		stopTicker(st);
-		stopDwell(st);
-		st.liveShownAt = new Map();
 		// A queued prompt can start while the previous run is still open; close it
 		// so its rows collapse behind their own summary.
 		if (st.live && !st.live.finished) {
@@ -924,14 +883,12 @@ export default function (pi: ExtensionAPI) {
 	const settle = (): void => {
 		closeThinking(st);
 		stopTicker(st);
-		stopDwell(st);
 		const run = st.live;
 		if (!run || run.finished) return;
 		// A settled call must not come back as an activity row when the run is
 		// reopened (retry, compaction continuation).
 		if (!st.settled) st.settled = new Set();
 		for (const id of run.toolIds) st.settled.add(id);
-		st.liveShownAt = new Map();
 		run.finished = true;
 		run.workedMs = Date.now() - run.startedAt;
 		trace(`E settle worked=${run.workedMs} tools=${run.toolIds.length} counts=${JSON.stringify(run.counts)}`);
@@ -955,20 +912,18 @@ export default function (pi: ExtensionAPI) {
 
 	on("session_shutdown", () => {
 		stopTicker(st);
-		stopDwell(st);
 		st.live = null;
 		st.runs = new Map();
 		st.announced = new Set();
 		st.toolStartAt.clear();
 		st.shownSeconds = new Map();
-		st.liveShownAt = new Map();
 		st.settled = new Set();
 		st.thinkingStartAt = 0;
 	});
 
 	pi.registerCommand("cc-tools", {
 		description: "Claude-Code-style tool rows: on/off/toggle/reveal/hide (Ctrl+O expands)",
-		async handler(args, ctx) {
+		async handler(args: string, ctx: ExtensionContext) {
 			const option = args.trim().toLowerCase();
 			const allowed = ["on", "off", "toggle", "reveal", "hide"];
 			if (option && !allowed.includes(option)) {

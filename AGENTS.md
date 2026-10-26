@@ -113,8 +113,16 @@ npm run typecheck # tsc --noEmit, no build step
 
 ## Known behaviors to preserve
 
-- Only the newest still-executing call has a live row; a finished call must not leave a stale
-  `Running` row while the model thinks.
+- Only one call has a row at a time: the running one, or the newest finished one, which stays with
+  a green check (red cross on failure) until the next call replaces it. The settle collapses it into
+  the turn summary; the row must never blank out between consecutive calls.
+- The activity area keeps a fixed three-line slot while the run is open (`LIVE_SLOT_LINES`), and the
+  slot is handed to the successor without a frame where two rows or no row occupies it; the
+  reservation is dropped at settle. Container tracking (`cc-tools:parent:v1`) is what makes the
+  hand-over possible — keep `installParentTracking` idempotent across `/reload`.
+- The line is handed over only when the call's arguments are complete or it starts executing
+  (`rowReady`): pi creates the component while the model streams the arguments, and drawing it then
+  makes the row flash empty and grow chunk by chunk. Keep the previous row until then.
 - A run split by notifications (subagent completion, injected context) keeps counting into the
   same turn.
 - A subagent's own tool calls are not counted as the main agent's; they report as

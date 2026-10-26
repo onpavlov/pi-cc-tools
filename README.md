@@ -2,7 +2,9 @@
 
 Claude Code-style tool output for [Pi](https://github.com/earendil-works/pi). While a tool runs,
 the transcript shows a single line with what is happening right now and how long it has been
-running. When the turn settles, every tool row collapses into one summary line above the answer.
+running. The line stays when the call finishes — now carrying a green check — and is replaced by the
+next call, so a burst of short commands never leaves a blank gap. When the turn settles, the line
+collapses into one summary above the answer.
 
 ```text
  ● Running npm · 4s
@@ -29,30 +31,31 @@ pi -e ./pi-cc-tools/extensions/cc-tools/index.ts   # try it for one run
 
 ## What it draws
 
-**While a call runs** — one line, replaced as the next call starts:
+**While a call runs** — one line, replaced as the next call starts (two snapshots of that line):
 
 ```text
- ● Reading src/config.ts · 0s
- ● Searching "getUserById" in src · 2s
+ ● Reading src/config.ts · 1s ✓
+
  ● Running npm · 12s
    └ $ npm test -- --watch=false
- ● Updating the todo list · 0s
- ● web_search cats · 1s
 ```
 
-Only the newest still-executing call is shown. A call that ends sooner than the dwell window keeps
-its line for the rest of that window (under a second), so a fast command is readable instead of
-flashing past; the next call replaces the line at once, without waiting the window out. After that
-the rows stay hidden until the turn settles, so the model's thinking never sits under a stale
-"Running" line.
+Only the newest call has the line. A finished call keeps it — with a green check next to the
+duration, or a red cross when it failed — until the next call replaces it at once. The line is
+therefore never blank: consecutive short commands change its text instead of making it blink, and
+the last finished row stays put while the model thinks.
+
+The hand-over waits until the next call's arguments are complete: pi creates the component while the
+model is still generating it, and drawing it then would flash an empty `Running… · 0s` and grow the
+command chunk by chunk. The line changes once, with the whole command.
 
 The activity area holds a fixed three-line slot for as long as the run is open: the gap above the
-row, the row itself, and its command line. A row that goes away — a call that finished, a pause
-between calls — leaves the slot blank instead of shrinking it, so nothing below (the streaming
-answer included) jumps while tools come and go. The reservation is dropped when the turn settles:
-the summary needs only its own gap.
+row, the row itself, and its command line. A row that goes away — a pause between calls, a settled
+call in a reopened run — leaves the slot blank instead of shrinking it, so nothing below (the
+streaming answer included) jumps while tools come and go. The reservation is dropped when the turn
+settles: the summary needs only its own gap.
 
-**When the turn settles** — the run's summary, placed on its last call:
+**When the turn settles** — the line collapses into the run's summary:
 
 ```text
  Thought for 15s, read 3 files, edited 1 file, ran 27 shell commands, used 6 todos, spawned 5 agents
@@ -99,7 +102,7 @@ when the elapsed timer arms and fires, and what a settle persisted.
 ## Development
 
 ```bash
-npm test        # 101 offline tests, no model and no terminal
+npm test        # 102 offline tests, no model and no terminal
 ```
 
 The tests import the extension through `jiti` the same way Pi does, drive lifecycle events through a
@@ -123,8 +126,8 @@ tests/                         offline renderer and lifecycle tests
 
 - The first call of a run still adds the slot's three lines: nothing before it exists to reserve the
   space. From the second call on the height stays put.
-- For one frame, a brand-new call may still show the previous row's data: a component joins its run
-  only when it renders for the first time. The reserved slot itself is handed over without doubling.
+- A call's row appears once its arguments are complete (or it starts executing): while the model is
+  still generating a long command, the previous row stays and the new one is not shown yet.
 - Thinking time is measured from streamed reasoning; providers that send none report no
   `Thought for` line.
 - Expanded calls (`Ctrl+O`) always use Pi's own renderer, so they ignore the summary styling.

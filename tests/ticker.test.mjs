@@ -3,7 +3,7 @@
  * extension has to ask for a repaint once a second while a call is in flight.
  */
 import assert from "node:assert/strict";
-import { HOLD_MS, createPi, loadExtension, makeTool, makeUi, runTests, test, toolResult, tree } from "./harness.mjs";
+import { createPi, loadExtension, makeTool, makeUi, runTests, test, toolResult, tree } from "./harness.mjs";
 
 const install = await loadExtension();
 const { api, emit } = createPi();
@@ -32,7 +32,9 @@ function boxFor(component) {
 // ---------------------------------------------------------------------------
 test("the timer asks for a repaint and the elapsed seconds advance", async () => {
 	await startTurn();
-	const box = boxFor(tool("bash", "tick-1", { command: "sleep 9" }));
+	const call = tool("bash", "tick-1", { command: "sleep 9" });
+	call.markExecutionStarted();
+	const box = boxFor(call);
 	assert.match(box.rows()[0], /· 0s/);
 	const before = ticks;
 	await wait(1300);
@@ -56,7 +58,13 @@ test("a streamed partial result does not stop the timer", async () => {
 
 test("a component that never saw executionStarted still ticks", async () => {
 	await startTurn();
-	// This is what a component recreated by tree navigation looks like.
+	// A component recreated by tree navigation: its call was announced earlier,
+	// so the transcript knows it even though this instance saw no execution start.
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id: "tick-3", name: "bash", arguments: {} }] } },
+		{ ui },
+	);
 	const box = boxFor(tool("bash", "tick-3", { command: "sleep 9" }));
 	box.text();
 	const before = ticks;
@@ -65,20 +73,22 @@ test("a component that never saw executionStarted still ticks", async () => {
 	assert.match(box.rows()[0], /· [12]s/);
 });
 
-test("the row is held for a moment when the call finishes, then goes away", async () => {
+test("a finished call keeps its row and stops the timer", async () => {
 	await startTurn();
 	const call = tool("bash", "tick-4", { command: "sleep 9" });
 	call.markExecutionStarted();
 	const box = boxFor(call);
 	box.text();
 	assert.match(box.rows()[0], /Running sleep/);
-	// The final duration shows, and the row is held so it can be read...
+	// The final duration shows with a check, and no further repaints are needed.
 	call.updateResult(toolResult({ durationMs: 8200 }));
-	assert.match(box.rows()[0], /Running sleep · 8s/);
-	// ...then collapses. Regression: a finished call used to keep showing a
-	// stale "· 0s" row for as long as the model kept thinking.
-	await wait(HOLD_MS + 200);
-	assert.deepEqual(box.rows(), [], "no stale row comes back on a repaint");
+	assert.match(box.rows()[0], /Running sleep · 8s ✓$/);
+	const afterFinish = ticks;
+	await wait(1300);
+	assert.equal(ticks, afterFinish, "a finished call does not request repaints");
+	// Regression: a finished call used to keep its row only for a moment and
+	// could leave a stale "· 0s" line behind while the model kept thinking.
+	assert.match(box.rows()[0], /Running sleep · 8s ✓$/, "the row stays readable while the model thinks");
 });
 
 test("a partial result carrying durationMs 0 does not reset the timer", async () => {
@@ -113,18 +123,26 @@ test("the elapsed timer restarts for every tool call", async () => {
 	await wait(1200);
 	assert.match(firstBox.rows()[0], /· 1s/);
 
-	// The next call of the same run starts counting from zero again.
+	// The next call of the same run takes the line over, counting from zero.
 	const second = tool("bash", "tick-b", { command: "two" });
 	second.markExecutionStarted();
 	const box = tree();
 	box.add(first);
 	box.add(second);
 	box.text(); // the frame in which a new call appears may still show the old one
-	assert.match(box.rows()[0], /Running two · 0s/);
+	box.text();
+	const rows = box.rows();
+	assert.equal(rows.length, 2, "only the newest call has a row");
+	assert.match(rows[0], /Running two · 0s/);
 });
 
 test("a ui without requestRender is tolerated", async () => {
 	await startTurn();
+	await emit(
+		"message_end",
+		{ message: { role: "assistant", content: [{ type: "toolCall", id: "tick-bare", name: "bash", arguments: {} }] } },
+		{ ui },
+	);
 	const bare = makeUi({ requestRender: undefined });
 	const call = makeTool(bare, { cwd: "/work/project" })("bash", "tick-bare", { command: "sleep 9" });
 	const box = boxFor(call);
