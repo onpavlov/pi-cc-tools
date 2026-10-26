@@ -25,7 +25,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { type Color, colorToOklch, oklchColor, truncateToWidth } from "@earendil-works/pi-tui";
 
 const PATCH = Symbol.for("cc-tools:patch:v1");
 const THINKING_FILTER = Symbol.for("cc-tools:thinking-filter:v1");
@@ -55,6 +55,21 @@ const LIVE_SLOT_LINES = 3;
  * the row still holds one line each and never takes over the screen.
  */
 const NESTED_PREVIEW_COUNT = 8;
+/**
+ * One breath of the live marker. Shorter than a fade because the glow travels a
+ * smaller distance: it reads as a shimmer rather than a slow pulse.
+ */
+export const PULSE_PERIOD_MS = 1000;
+/**
+ * How far the accent's lightness travels either side of its own value, in OKLCH.
+ * The dot is never mixed with the background, so its hue and chroma stay put —
+ * it brightens and dims instead of washing out.
+ */
+const PULSE_GLOW = 0.14;
+/** Repaint cadence; a colour-only change of one cell needs no more. */
+const PULSE_FRAME_MS = 90;
+/** Cadence when the theme cannot animate: only the seconds counter needs it. */
+const IDLE_TICK_MS = 1000;
 
 /** Opt-in tracing: set PI_CC_TOOLS_DEBUG=/path/to/log to capture what the rows do. */
 function trace(message: string): void {
@@ -151,6 +166,10 @@ type PatchState = {
 };
 
 type Styler = {
+	/** Concrete colours per token, when the theme resolves them (a real Theme does). */
+	colors?: Readonly<Record<string, Color | undefined>>;
+	/** Render text with a concrete colour, at whatever terminal colour mode applies. */
+	style?(text: string, options: { fg?: Color }): string;
 	fg(token: string, text: string): string;
 	bold(text: string): string;
 	italic(text: string): string;
@@ -163,6 +182,62 @@ function styler(st: PatchState): Styler {
 	// Styler declares; narrowing to it only drops members this module never calls.
 	const theme = st.ui?.theme as unknown as Styler | undefined;
 	return theme && typeof theme.fg === "function" ? theme : NO_STYLE;
+}
+
+/**
+ * The phase of the glow at `now`, 0…1: 0 is the dimmest point, 1 the brightest.
+ * A pure function of the clock, so a frame pi's diffing skipped, a repaint or a
+ * `/reload` cannot desync it. Exported so the curve can be checked without a
+ * terminal.
+ */
+export function pulseAmount(now: number): number {
+	const phase = ((now % PULSE_PERIOD_MS) + PULSE_PERIOD_MS) % PULSE_PERIOD_MS;
+	// Cosine, so the glow leaves the bright peak and returns to it without a jump.
+	return (1 - Math.cos((2 * Math.PI * phase) / PULSE_PERIOD_MS)) / 2;
+}
+
+/** The accent's own hue and chroma with its lightness shifted by the glow. */
+function glowColor(accent: Color, amount: number): Color {
+	const oklch = colorToOklch(accent);
+	const lightness = oklch.l + (amount * 2 - 1) * PULSE_GLOW;
+	// Stays inside the sRGB gamut: an accent already near white or black must not
+	// clamp into a colour the terminal cannot show.
+	return oklchColor(Math.min(0.98, Math.max(0.02, lightness)), oklch.c, oklch.h);
+}
+
+/**
+ * The concrete accent colour a theme resolves, if it exposes a usable one. A
+ * custom theme may hand out a plain string: mixing needs a real `Color`, so
+ * such a theme keeps a static dot instead of throwing mid-render.
+ */
+function concreteAccent(style: Styler): Color | undefined {
+	const accent = style.colors?.accent;
+	// SAFETY: the shape check below is exactly what a Colour carries; anything
+	// else (a plain string from a custom theme) is rejected instead of passed on.
+	const candidate = accent as { kind?: unknown } | undefined;
+	if (!candidate || typeof candidate !== "object" || typeof candidate.kind !== "string") return undefined;
+	return accent;
+}
+
+/** Whether this theme can animate the marker: without concrete colours it cannot. */
+function pulsing(style: Styler): boolean {
+	return concreteAccent(style) !== undefined && typeof style.style === "function";
+}
+
+/**
+ * The live marker. Colour only: the glyph stays one cell wide, so the row never
+ * reflows and the activity slot keeps its height.
+ */
+function pulseMarker(style: Styler, now: number): string {
+	const accent = concreteAccent(style);
+	const render = style.style;
+	if (!accent || typeof render !== "function") return style.fg("accent", "●");
+	try {
+		return render.call(style, "●", { fg: glowColor(accent, pulseAmount(now)) });
+	} catch {
+		// Rendering must never fail because a colour could not be shifted.
+		return style.fg("accent", "●");
+	}
 }
 
 function emptyCounts(): Counts {
@@ -531,17 +606,24 @@ function stopTicker(st: PatchState): void {
 	st.ticker = undefined;
 }
 
+/** Frame cadence: fast enough for the pulse, slower when only seconds move. */
+function liveTickMs(st: PatchState): number {
+	return pulsing(styler(st)) ? PULSE_FRAME_MS : IDLE_TICK_MS;
+}
+
 /**
  * Pi repaints the transcript only when something changes, so a tool that runs
- * without emitting output would freeze its elapsed seconds. Re-request a render
- * once a second for as long as a call of the live run is still executing.
+ * without emitting output would freeze its elapsed seconds — and a colour-only
+ * pulse needs a frame far more often than once a second. Re-request a render on
+ * one timer for as long as a call of the live run is still executing.
  */
 function tickLive(st: PatchState, ui: any): void {
 	if (st.ticker !== undefined || typeof ui?.requestRender !== "function") {
 		if (st.ticker === undefined) trace(`T arm-skipped ui=${typeof ui?.requestRender}`);
 		return;
 	}
-	trace("T arm");
+	const frameMs = liveTickMs(st);
+	trace(`T arm ${frameMs}ms`);
 	st.ticker = setTimeout(() => {
 		st.ticker = undefined;
 		const run = st.live;
@@ -552,7 +634,7 @@ function tickLive(st: PatchState, ui: any): void {
 		trace("T fire");
 		ui.requestRender();
 		tickLive(st, ui);
-	}, 1000);
+	}, frameMs);
 }
 
 function closeThinking(st: PatchState): void {
@@ -705,11 +787,12 @@ function liveRow(st: PatchState, component: any, width: number): string[] {
 	const style = styler(st);
 	const { verb, detail, title, command, commandPrefix } = describeTool(component);
 	const label = title ?? (detail ? `${verb} ${detail}` : `${verb}…`);
+	const now = Date.now();
 	const seconds = elapsedSeconds(st, component);
 	const running = stillRunning(component);
 	// The row is on screen, so the call is in flight even if `executionStarted`
 	// never reached this component instance.
-	st.lastLiveAt = Date.now();
+	st.lastLiveAt = now;
 	st.liveRunning = running;
 	if (running) tickLive(st, component.ui);
 	if (st.__ccSeconds !== seconds) {
@@ -718,8 +801,11 @@ function liveRow(st: PatchState, component: any, width: number): string[] {
 	}
 	// A failed call must not read as a success: the check flips to a cross.
 	const failed = component.result?.isError === true;
+	// Only a call in flight breathes: a finished row keeps a plain accent dot
+	// next to its check or cross, and the summary band its own static marker.
+	const dot = running ? pulseMarker(style, now) : style.fg("accent", "●");
 	const marker = running ? "" : ` ${style.fg(failed ? "error" : "success", failed ? "✗" : "✓")}`;
-	const head = `${style.fg("accent", "●")} ${style.fg("toolTitle", label)}${style.fg("dim", ` · ${duration(seconds)}`)}${marker}`;
+	const head = `${dot} ${style.fg("toolTitle", label)}${style.fg("dim", ` · ${duration(seconds)}`)}${marker}`;
 	const lines = [`${ROW_PAD}${head}`];
 	if (command) lines.push(`${ROW_PAD}  ${style.fg("dim", `└ ${commandPrefix ?? ""}`)}${style.fg("muted", command)}`);
 	lines.push(...nestedRows(st, component, style));
@@ -1191,6 +1277,9 @@ export default function (pi: ExtensionAPI) {
 			else if (option === "on") st.enabled = true;
 			else if (option === "off") st.enabled = false;
 			else st.enabled = !st.enabled;
+			// Nothing animates while the renderer is off or every row is revealed:
+			// stop asking for frames instead of letting the pulse timer run unseen.
+			if (!st.enabled || st.revealAll) stopTicker(st);
 			let status = "off";
 			if (st.enabled) status = st.revealAll ? "on · all rows" : "on · live line";
 			ctx.ui.notify(`cc-tools: ${status}`, "info");
