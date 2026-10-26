@@ -62,6 +62,15 @@ The hand-over waits until the next call's arguments are complete: pi creates the
 model is still generating it, and drawing it then would flash an empty `Running… · 0s` and grow the
 command chunk by chunk. The line changes once, with the whole command.
 
+The `●` of a call in flight glows: its lightness travels up and down around the theme's
+`accent` in OKLCH — about ±0.14, so the dot brightens and dims — while hue and chroma stay
+exactly where the theme put them, so it never washes out toward the background. Only the
+colour changes: the glyph stays one cell, so the row keeps its width and the slot its height.
+The glow is a pure function of the clock (a 1 s loop), so a skipped frame, a repaint or a
+`/reload` never desyncs it, and it stops the moment the call finishes: a finished row keeps a
+static dot beside its `✓`/`✗`, the summary band keeps its own `○`, and a replayed session
+never animates. A theme without concrete colours falls back to a plain `●`.
+
 The activity area holds a fixed three-line slot for as long as the run is open: the gap above the
 row, the row itself, and its command line. A taller row — a `codemode` call with its nested calls —
 raises the slot, and the slot keeps that height until the run settles: a row that goes away (a pause
@@ -113,6 +122,9 @@ counts are re-derived from messages, so older sessions replay with real numbers.
 - Pi `1.4.0` or newer.
 - Works with the default renderer and with custom footers/editors; nothing depends on Pi's own
   spinner or animation loop.
+- While a call runs the row is repainted at animation cadence (every 90 ms, a colour-only change of
+  one cell); with a theme that resolves no concrete colours it is repainted once a second for the
+  seconds counter.
 - Reload-safe: `/reload` swaps the renderer for the new code and keeps the current turn's counters.
 
 ## Debugging
@@ -123,7 +135,7 @@ when the elapsed timer arms and fires, and what a settle persisted.
 ## Development
 
 ```bash
-npm test        # 119 offline tests, no model and no terminal
+npm test        # 131 offline tests, no model and no terminal
 ```
 
 The tests import the extension through `jiti` the same way Pi does, drive lifecycle events through a
@@ -155,6 +167,8 @@ tests/                         offline renderer and lifecycle tests
   shows the whole script, the call log and the output.
 - Thinking time is measured from streamed reasoning; providers that send none report no
   `Thought for` line.
+- The glow moves lightness only, and the shift is clamped to stay inside sRGB: an accent already
+  near white or black pulses less than a mid-tone one.
 - Expanded calls (`Ctrl+O`) always use Pi's own renderer, so they ignore the summary styling.
 
 ## License

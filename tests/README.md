@@ -34,6 +34,7 @@ CC_TOOLS_EXTENSION=/tmp/variant.ts npm test
 | `layout.test.mjs` | widths 1…200 for live/summary/fallback rows, the rule spanning each width, the one-column band without a rule, zero and negative widths, ellipsis cut, ANSI styling not inflating the measured width |
 | `state.test.mjs` | `agent_before_settle` / `agent_settled` persistence, settle idempotency, new prompt vs custom-message runs, `agent_start` reopening, `message_end` counting and dedupe, `session_start`/`session_shutdown` resets, replay of a whole branch |
 | `ticker.test.mjs` | the elapsed-seconds timer: arming, advancing, partial results, missing `requestRender`, stopping when the call finishes or the run settles, per-call restart, recorded duration, a finished row staying put without repaints |
+| `pulse.test.mjs` | the live marker's glow: the phase curve (bounded, a pure function of the clock), hue and chroma held while the lightness travels both sides of the accent, one-cell width at every phase, animation cadence, plain fallback without concrete theme colours (including a custom theme handing out strings), static dot on a finished row, static summary band, the timer stopping on `/cc-tools off` and `reveal` |
 | `thinking.test.mjs` | hidden-thinking placeholder removal, blank-line cleanup, thinking-only messages, label-driven matching, behaviour when compact tools are off |
 | `commands.test.mjs` | `/cc-tools on\|off\|toggle\|reveal\|hide`, invalid option, click-to-reveal, clicks that belong to the host |
 | `reload.test.mjs` | `/reload` semantics: an older copy's wrapper switched off, a repeated install not stacking, a reload swapping closures while keeping counters, the new code rendering immediately, the thinking filter rebuilding, parent tracking rebuilt |
@@ -64,6 +65,11 @@ Notes:
 
 - `makeUi({...})` overrides `requestRender`, `notify`, `theme`; the timer tests
   count repaint requests through it.
+- `THEME` is the real theme instance pi installs when the harness loads; pass it
+  as `makeUi({ theme: THEME })` to exercise styling and the pulse. Without it the
+  stub theme renders plain text.
+- `box.rows()` and `box.frame()` strip ANSI, which is what layout tests want. For
+  colours, render through `box.container.render(width)` and read the escapes.
 - Tool ids must be unique within a test run: the extension maps ids to runs.
 - A component only joins a run on its first render, so call `box.text()` once
   after adding it when a test depends on the row it just created.
@@ -106,3 +112,12 @@ Each of these was a real bug; the test named in brackets fails if it comes back.
 | The activity area shrinking when a tall codemode row hands the line over | `codemode: a tall codemode row raises the slot for the rest of the run` |
 | Nested calls vanishing after `/reload` | `codemode: the row falls back to codemode's own call log when the events are gone` |
 | Parent tracking wrapped twice after `/reload` | `reload: a reload rebuilds parent tracking without stacking` |
+| A static `●` giving no sign that a long call is still alive | `pulse: the running marker shimmers at animation cadence`, `pulse: the fading marker stays one cell and the row layout is unchanged` |
+| The dot reflowing the row or stretching the activity slot while it fades | `pulse: the fading marker stays one cell and the row layout is unchanged` |
+| A pulse timer surviving `/cc-tools off` or `/cc-tools reveal` | `pulse: /cc-tools off stops the pulse timer`, `pulse: /cc-tools reveal stops the pulse timer` |
+| A finished row or the settled summary band still animating | `pulse: a finished call keeps a static check instead of pulsing`, `pulse: a settled run's summary band stays static` |
+| A theme without concrete colours animating, or crashing on the pulse | `pulse: without a theme the dot is plain and no animation is armed`, `pulse: a custom theme handing out string colours keeps a static dot` |
+| The fade desyncing after a skipped frame or a `/reload` | `pulse: the glow depends on the clock only, never on a frame count` |
+| The pulse fading away entirely instead of glowing | `pulse: the glow is bounded and reaches both of its ends` |
+| The dot greying out toward the background instead of glowing | `pulse: the glow keeps the accent's hue and chroma` |
+| The glow only brightening (or only dimming) around the accent | `pulse: the dot brightens above and dims below the accent` |

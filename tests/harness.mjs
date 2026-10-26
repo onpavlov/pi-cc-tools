@@ -58,6 +58,11 @@ export const tui = await jiti.import("@earendil-works/pi-tui");
 /** Container is what the transcript uses to hold message/tool components. */
 export const BaseContainer = Object.getPrototypeOf(host.ToolExecutionComponent.prototype).constructor;
 host.initTheme("dark");
+/**
+ * The real theme pi installs globally. `host.theme` is a proxy that only the
+ * agent's own module sees, so read the instance off the shared global key.
+ */
+export const THEME = globalThis[Symbol.for("@earendil-works/pi-coding-agent:theme")];
 
 /** Built from a string so this file carries no literal control characters. */
 const ANSI = new RegExp("\\x1b\\[[0-9;?]*[ -/]*[@-~]|\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)", "g");
