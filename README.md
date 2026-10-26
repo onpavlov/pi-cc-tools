@@ -39,6 +39,11 @@ pi -e ./pi-cc-tools/extensions/cc-tools/index.ts   # try it for one run
 
  ● Running npm · 12s
    └ $ npm test -- --watch=false
+
+ ● codemode · 3s
+   └ await tools.searchTools("rank")
+   └ ✓ mcp:dev-radius:search rank 120ms
+   └ ✓ read src/config.ts 8ms
 ```
 
 Only the newest call has the line. A finished call keeps it — with a green check next to the
@@ -46,15 +51,23 @@ duration, or a red cross when it failed — until the next call replaces it at o
 therefore never blank: consecutive short commands change its text instead of making it blink, and
 the last finished row stays put while the model thinks.
 
+The second line is what the call runs: a shell command for `bash`, the first meaningful line of the
+script for `codemode` (its `// @options:` hint and blank lines are skipped). A `codemode` script can
+call any tool, including MCP tools; those calls never reach the transcript as rows of their own, so
+they are listed underneath the call that made them, newest eight with a status (`…` running, `✓` ok,
+`✗` error, `⊘` cancelled), their argument preview and their duration. Older calls collapse into
+`... (N earlier calls)`.
+
 The hand-over waits until the next call's arguments are complete: pi creates the component while the
 model is still generating it, and drawing it then would flash an empty `Running… · 0s` and grow the
 command chunk by chunk. The line changes once, with the whole command.
 
 The activity area holds a fixed three-line slot for as long as the run is open: the gap above the
-row, the row itself, and its command line. A row that goes away — a pause between calls, a settled
-call in a reopened run — leaves the slot blank instead of shrinking it, so nothing below (the
-streaming answer included) jumps while tools come and go. The reservation is dropped when the turn
-settles: the summary needs only its own gap.
+row, the row itself, and its command line. A taller row — a `codemode` call with its nested calls —
+raises the slot, and the slot keeps that height until the run settles: a row that goes away (a pause
+between calls, a settled call in a reopened run) leaves it blank instead of shrinking it, so nothing
+below (the streaming answer included) jumps while tools come and go. The reservation is dropped when
+the turn settles: the summary needs only its own gap.
 
 **When the turn settles** — the line collapses into the run's summary:
 
@@ -87,6 +100,8 @@ branch), so they survive reloads and restarts. Two consequences worth knowing:
 
 - Activity the transcript never announced is not counted — a subagent's tool calls run in their own
   session, so the summary reports the main agent's work plus `spawned N agents`.
+- The calls a `codemode` script makes are part of that script's work, not separate calls: the run
+  reports one `codemode` call, never one `read`/`grep` per inner call.
 - A run split by notifications (subagent completion, injected context) keeps counting into the same
   turn instead of starting over.
 
@@ -108,7 +123,7 @@ when the elapsed timer arms and fires, and what a settle persisted.
 ## Development
 
 ```bash
-npm test        # 105 offline tests, no model and no terminal
+npm test        # 119 offline tests, no model and no terminal
 ```
 
 The tests import the extension through `jiti` the same way Pi does, drive lifecycle events through a
@@ -134,6 +149,10 @@ tests/                         offline renderer and lifecycle tests
   space. From the second call on the height stays put.
 - A call's row appears once its arguments are complete (or it starts executing): while the model is
   still generating a long command, the previous row stays and the new one is not shown yet.
+- Nested rows come from Pi's tool events, so `codemode`'s non-tool calls (`searchTools`,
+  `models.classify`) are not listed under the script; its tool and MCP calls are.
+- The collapsed row lists the newest eight nested calls; `Ctrl+O` opens Pi's own renderer, which
+  shows the whole script, the call log and the output.
 - Thinking time is measured from streamed reasoning; providers that send none report no
   `Thought for` line.
 - Expanded calls (`Ctrl+O`) always use Pi's own renderer, so they ignore the summary styling.

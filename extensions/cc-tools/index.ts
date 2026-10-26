@@ -33,7 +33,7 @@ const THINKING_FILTER = Symbol.for("cc-tools:thinking-filter:v1");
 const PARENT = Symbol.for("cc-tools:parent:v1");
 const PARENT_TRACKING = Symbol.for("cc-tools:parent-tracking:v1");
 /** Bumped when the patch layout changes, so a reload can migrate older state. */
-const PATCH_VERSION = 3;
+const PATCH_VERSION = 4;
 /** New object on every module evaluation: tells a reload from a repeated install. */
 const LOAD_TOKEN = Symbol("cc-tools-load");
 const SUMMARY_ENTRY = "cc-tools-summary";
@@ -49,6 +49,12 @@ const ROW_PAD = " ";
  * slot at the height of the tallest row is what keeps the output below it still.
  */
 const LIVE_SLOT_LINES = 3;
+/**
+ * Nested calls a row lists before it collapses the older ones into a count,
+ * matching Pi's own codemode renderer. A script can make hundreds of calls;
+ * the row still holds one line each and never takes over the screen.
+ */
+const NESTED_PREVIEW_COUNT = 8;
 
 /** Opt-in tracing: set PI_CC_TOOLS_DEBUG=/path/to/log to capture what the rows do. */
 function trace(message: string): void {
@@ -70,6 +76,18 @@ type Counts = {
 	edit: number;
 	agents: number;
 	other: Record<string, number>;
+};
+
+/** A tool call a tool made while it ran (`ctx.executeTool()`), never a transcript row. */
+type NestedStatus = "running" | "ok" | "error" | "cancelled";
+
+type NestedCall = {
+	id: string;
+	name: string;
+	/** One-line argument preview, computed once when the call starts. */
+	detail: string;
+	status: NestedStatus;
+	durationMs?: number;
 };
 
 type Run = {
@@ -124,6 +142,12 @@ type PatchState = {
 	liveRunning?: boolean;
 	/** Last elapsed value written to the debug trace, so it logs per second, not per repaint. */
 	__ccSeconds?: number;
+	/** Nested calls per calling tool call id: drawn under its row, never counted. */
+	nested?: Map<string, NestedCall[]>;
+	/** Height the activity slot has reached in the open run; it never shrinks before settle. */
+	slotLines?: number;
+	/** UI of the row currently on screen: the way a nested call asks for its sub-row. */
+	rowUi?: { requestRender?: () => void };
 };
 
 type Styler = {
@@ -241,9 +265,9 @@ function relativePath(path: string | undefined, cwd: string | undefined): string
 	return value;
 }
 
-function quoted(pattern: unknown, where?: string): string {
+function quoted(pattern: unknown, where?: string, cwd?: string): string {
 	const text = typeof pattern === "string" ? `"${pattern}"` : "";
-	const location = where ? ` in ${relativePath(where, undefined)}` : "";
+	const location = where ? ` in ${relativePath(where, cwd)}` : "";
 	return `${text}${location}`;
 }
 
@@ -284,15 +308,44 @@ function programOf(command: string): string {
 	return "";
 }
 
-function describeTool(component: any): { verb: string; detail: string; command?: string } {
+/** A tool call's row: what it does, its command line, and anything below it. */
+type ToolRow = {
+	verb: string;
+	detail: string;
+	/** Exact label, for a tool whose name is the whole row (`codemode`). */
+	title?: string;
+	/** Second line: what the call runs. */
+	command?: string;
+	/** What follows the `└` on that line: a shell command, or a bare script line. */
+	commandPrefix?: string;
+};
+
+/**
+ * The first line of a script that says something: codemode's arguments are raw
+ * JavaScript, so the leading `// @options:` hint and blank lines say nothing and
+ * the keys-only fallback (`code`) is worse than useless.
+ */
+function firstScriptLine(code: unknown): string {
+	if (typeof code !== "string") return "";
+	for (const line of code.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("//")) continue;
+		return oneLine(trimmed);
+	}
+	return "";
+}
+
+function describeTool(component: any): ToolRow {
 	const name = String(component.toolName ?? "tool");
 	const args = component.args ?? {};
 	const cwd = typeof component.cwd === "string" ? component.cwd : undefined;
 	switch (name) {
 		case "bash": {
 			const command = oneLine(String(args.command ?? ""));
-			return { verb: "Running", detail: programOf(command), command };
+			return { verb: "Running", detail: programOf(command), command, commandPrefix: "$ " };
 		}
+		case "codemode":
+			return { verb: "codemode", detail: "", title: "codemode", command: firstScriptLine(args.code), commandPrefix: "" };
 		case "read":
 			return { verb: "Reading", detail: relativePath(args.path, cwd) };
 		case "edit":
@@ -313,6 +366,133 @@ function describeTool(component: any): { verb: string; detail: string; command?:
 		default:
 			return { verb: name, detail: argumentSummary(args) };
 	}
+}
+
+/** One-line preview of a nested call's arguments, shortened like a row's detail. */
+function nestedDetail(name: string, args: any, cwd: string | undefined): string {
+	if (!args || typeof args !== "object") return "";
+	switch (name) {
+		case "grep":
+			return quoted(args.pattern, args.path, cwd);
+		case "find":
+		case "glob":
+			return quoted(args.pattern ?? args.glob, args.path, cwd);
+		case "bash":
+		case "shell":
+			return oneLine(String(args.command ?? ""));
+		default: {
+			const path = args.path ?? args.file;
+			if (typeof path === "string") return relativePath(path, cwd);
+			return argumentSummary(args);
+		}
+	}
+}
+
+function millis(ms: number): string {
+	return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+function nestedIcon(style: Styler, status: NestedStatus): string {
+	switch (status) {
+		case "ok":
+			return style.fg("success", "✓");
+		case "error":
+			return style.fg("error", "✗");
+		case "cancelled":
+			return style.fg("muted", "⊘");
+		default:
+			return style.fg("warning", "…");
+	}
+}
+
+function knownStatus(value: unknown): NestedStatus {
+	if (value === "running" || value === "ok" || value === "error" || value === "cancelled") return value;
+	return "ok";
+}
+
+/**
+ * Remember a nested call under the tool call that made it. Only a call the
+ * transcript announced is tracked: a subagent's codemode script reaches the same
+ * handlers, and its calls would linger without ever being drawn.
+ */
+function startNested(st: PatchState, parentId: string, event: any, cwd: string | undefined): void {
+	if (!st.live || !st.announced.has(parentId)) return;
+	const id = String(event?.toolCallId ?? "");
+	if (!id) return;
+	st.nested ??= new Map();
+	let calls = st.nested.get(parentId);
+	if (!calls) {
+		calls = [];
+		st.nested.set(parentId, calls);
+	}
+	if (calls.some((call) => call.id === id)) return;
+	const name = String(event?.toolName ?? "tool");
+	calls.push({
+		id,
+		name,
+		detail: nestedDetail(name, event?.args, cwd),
+		status: "running",
+	});
+	trace(`N start parent=${parentId} id=${id} name=${name} calls=${calls.length}`);
+	// The parent may not publish an update of its own, so ask for the repaint
+	// that draws the new sub-row.
+	st.rowUi?.requestRender?.();
+}
+
+function endNested(st: PatchState, parentId: string, event: any): void {
+	const calls = st.nested?.get(parentId);
+	if (!calls) return;
+	const id = String(event?.toolCallId ?? "");
+	const call = calls.find((candidate) => candidate.id === id);
+	if (!call) return;
+	call.status = event?.isError === true ? "error" : "ok";
+	if (typeof event?.durationMs === "number") call.durationMs = event.durationMs;
+	trace(`N end parent=${parentId} id=${id} status=${call.status} ms=${call.durationMs ?? "?"}`);
+	st.rowUi?.requestRender?.();
+}
+
+/** Calls a parent stopped waiting for — an aborted script — never report an end. */
+function cancelNested(st: PatchState, parentId: string): void {
+	for (const call of st.nested?.get(parentId) ?? []) {
+		if (call.status === "running") call.status = "cancelled";
+	}
+}
+
+/**
+ * The nested calls of one component: what the live events recorded, or — after a
+ * reload dropped them — the call log codemode itself keeps on its result.
+ */
+function nestedCallsOf(st: PatchState, component: any): NestedCall[] {
+	const recorded = st.nested?.get(String(component.toolCallId));
+	if (recorded?.length) return recorded;
+	if (String(component.toolName) !== "codemode") return [];
+	const calls = component.result?.details?.calls;
+	if (!Array.isArray(calls)) return [];
+	return calls.map((call: any) => ({
+		id: String(call?.id ?? ""),
+		name: String(call?.name ?? "tool"),
+		detail: oneLine(String(call?.args ?? "")),
+		status: knownStatus(call?.status),
+		durationMs: typeof call?.durationMs === "number" ? call.durationMs : undefined,
+	}));
+}
+
+/** The newest nested calls of a row, oldest hidden behind a count. */
+function nestedRows(st: PatchState, component: any, style: Styler): string[] {
+	const calls = nestedCallsOf(st, component);
+	if (calls.length === 0) return [];
+	const shown = calls.slice(-NESTED_PREVIEW_COUNT);
+	const hidden = calls.length - shown.length;
+	const lead = `${ROW_PAD}  ${style.fg("dim", "└ ")}`;
+	const lines: string[] = [];
+	if (hidden > 0) lines.push(`${lead}${style.fg("muted", `... (${hidden} earlier ${hidden === 1 ? "call" : "calls"})`)}`);
+	for (const call of shown) {
+		const detail = call.detail ? ` ${style.fg("muted", call.detail)}` : "";
+		const took = typeof call.durationMs === "number" ? ` ${style.fg("dim", millis(call.durationMs))}` : "";
+		const name = style.fg("toolTitle", shortToolName(call.name));
+		lines.push(`${lead}${nestedIcon(style, call.status)} ${name}${detail}${took}`);
+	}
+	return lines;
 }
 
 /** A partially streamed result is not a finished call. */
@@ -501,15 +681,20 @@ function successorRow(st: PatchState, component: any): any {
 }
 
 /** Fill a live row up to the slot height, so a short row leaves the same gap. */
-function inSlot(lines: string[]): string[] {
+function inSlot(st: PatchState, lines: string[]): string[] {
+	const height = Math.max(LIVE_SLOT_LINES, st.slotLines ?? 0);
 	const padded = lines.slice();
-	while (padded.length < LIVE_SLOT_LINES) padded.push("");
+	while (padded.length < height) padded.push("");
+	// A tall row — a codemode call with its nested calls — raises the slot for the
+	// rest of the run: the next call takes the line over without moving what sits
+	// below the activity area.
+	if (padded.length > height) st.slotLines = padded.length;
 	return padded;
 }
 
 /** The blank slot a hidden row still holds, so the screen does not jump. */
-function blankSlot(): string[] {
-	return new Array<string>(LIVE_SLOT_LINES).fill("");
+function blankSlot(st: PatchState): string[] {
+	return new Array<string>(Math.max(LIVE_SLOT_LINES, st.slotLines ?? 0)).fill("");
 }
 
 /**
@@ -518,8 +703,8 @@ function blankSlot(): string[] {
  */
 function liveRow(st: PatchState, component: any, width: number): string[] {
 	const style = styler(st);
-	const { verb, detail, command } = describeTool(component);
-	const label = detail ? `${verb} ${detail}` : `${verb}…`;
+	const { verb, detail, title, command, commandPrefix } = describeTool(component);
+	const label = title ?? (detail ? `${verb} ${detail}` : `${verb}…`);
 	const seconds = elapsedSeconds(st, component);
 	const running = stillRunning(component);
 	// The row is on screen, so the call is in flight even if `executionStarted`
@@ -536,7 +721,11 @@ function liveRow(st: PatchState, component: any, width: number): string[] {
 	const marker = running ? "" : ` ${style.fg(failed ? "error" : "success", failed ? "✗" : "✓")}`;
 	const head = `${style.fg("accent", "●")} ${style.fg("toolTitle", label)}${style.fg("dim", ` · ${duration(seconds)}`)}${marker}`;
 	const lines = [`${ROW_PAD}${head}`];
-	if (command) lines.push(`${ROW_PAD}  ${style.fg("dim", "└ $ ")}${style.fg("muted", command)}`);
+	if (command) lines.push(`${ROW_PAD}  ${style.fg("dim", `└ ${commandPrefix ?? ""}`)}${style.fg("muted", command)}`);
+	lines.push(...nestedRows(st, component, style));
+	// This row is about to be drawn: a nested call that starts now has somewhere
+	// to ask for the frame that shows it.
+	st.rowUi = component.ui;
 	return ["", ...lines.map((line) => truncateToWidth(line, width, "…"))];
 }
 
@@ -572,8 +761,17 @@ function summaryRow(st: PatchState, run: Run, width: number): string[] {
 }
 
 function fallbackRow(component: any, width: number): string[] {
-	const detail = argumentSummary(component.args);
-	const row = `● ${component.toolName}${detail ? `(${detail})` : ""}${component.result?.isError ? " ✗" : ""}`;
+	// A revealed script row names what it runs; every other tool names itself and
+	// keeps its most descriptive argument.
+	const { title, command } = describeTool(component);
+	let text = String(component.toolName);
+	if (title) {
+		text = command ? `${title} ${command}` : title;
+	} else {
+		const detail = argumentSummary(component.args);
+		if (detail) text = `${text}(${detail})`;
+	}
+	const row = `● ${text}${component.result?.isError ? " ✗" : ""}`;
 	return [truncateToWidth(row, width, "…")];
 }
 
@@ -755,11 +953,11 @@ function installPatch(): PatchState {
 		if (this.toolCallId !== slotOwner(st, run)) return [];
 		// A settled row stays collapsed even when a retry reopens the run: it keeps
 		// the slot blank instead of dropping it, so nothing below moves.
-		if (settled) return successorRow(st, this) ? [] : blankSlot();
+		if (settled) return successorRow(st, this) ? [] : blankSlot(st);
 		// A finished call's row yields the moment a newer row exists: the next
 		// call replaces it at once instead of drawing beside it for a frame.
 		if (!stillRunning(this) && successorRow(st, this)) return [];
-		return inSlot(liveRow(st, this, width));
+		return inSlot(st, liveRow(st, this, width));
 	};
 
 	proto.handleMouse = function (event: any): any {
@@ -845,6 +1043,8 @@ export default function (pi: ExtensionAPI) {
 		st.toolStartAt.clear();
 		st.settled = new Set();
 		st.thinkingStartAt = 0;
+		st.nested = new Map();
+		st.slotLines = LIVE_SLOT_LINES;
 		stopTicker(st);
 		loadRuns(ctx, st);
 		// The placeholder text is filtered out of the transcript; keeping a stable
@@ -881,6 +1081,7 @@ export default function (pi: ExtensionAPI) {
 			st.live.workedMs = Date.now() - st.live.startedAt;
 		}
 		st.live = newRun();
+		st.slotLines = LIVE_SLOT_LINES;
 	});
 
 	on("message_update", (event: any) => {
@@ -906,6 +1107,27 @@ export default function (pi: ExtensionAPI) {
 	});
 	on("turn_end", () => closeThinking(st));
 
+	// Nested calls — a codemode script's tool and MCP calls — never reach the
+	// transcript as rows of their own: they carry their caller's id and are drawn
+	// underneath its row. They are deliberately kept out of `st.runs` and the
+	// run's counters, so the summary still reports one `codemode` call.
+	on("tool_execution_start", (event: any, ctx: any) => {
+		const parentId = event?.parentToolCallId;
+		if (!parentId) return;
+		startNested(st, String(parentId), event, typeof ctx?.cwd === "string" ? ctx.cwd : undefined);
+	});
+
+	on("tool_execution_end", (event: any) => {
+		const parentId = event?.parentToolCallId;
+		if (parentId) {
+			endNested(st, String(parentId), event);
+			return;
+		}
+		// The parent finished: anything it left running was aborted with it.
+		const id = String(event?.toolCallId ?? "");
+		if (id) cancelNested(st, id);
+	});
+
 	const settle = (): void => {
 		closeThinking(st);
 		stopTicker(st);
@@ -914,7 +1136,13 @@ export default function (pi: ExtensionAPI) {
 		// A settled call must not come back as an activity row when the run is
 		// reopened (retry, compaction continuation).
 		if (!st.settled) st.settled = new Set();
-		for (const id of run.toolIds) st.settled.add(id);
+		for (const id of run.toolIds) {
+			st.settled.add(id);
+			// Nothing draws a settled run's nested calls any more: its row collapses
+			// into the summary band, so they would only linger.
+			st.nested?.delete(id);
+		}
+		st.slotLines = LIVE_SLOT_LINES;
 		run.finished = true;
 		run.workedMs = Date.now() - run.startedAt;
 		trace(`E settle worked=${run.workedMs} tools=${run.toolIds.length} counts=${JSON.stringify(run.counts)}`);
@@ -945,6 +1173,8 @@ export default function (pi: ExtensionAPI) {
 		st.shownSeconds = new Map();
 		st.settled = new Set();
 		st.thinkingStartAt = 0;
+		st.nested = new Map();
+		st.slotLines = LIVE_SLOT_LINES;
 	});
 
 	pi.registerCommand("cc-tools", {
