@@ -3,10 +3,14 @@
  *
  * While a run is going, every tool row except the newest one is hidden, so the
  * transcript shows a single line: what pi is doing right now plus its command.
- * When the run settles, all tool rows collapse into one summary line
- * ("Thought for 4s, searched for 1 pattern, ran 3 shell commands") that sits
- * right above the final answer. Ctrl+O (or a click on the summary) reveals the
- * rows again; `/cc-tools on|off|toggle|reveal|hide` controls the renderer.
+ * The activity area keeps a fixed height from the first call to the settle —
+ * an empty slot when no row is drawn — because the transcript follows the
+ * terminal bottom and a line appearing or disappearing there scrolls the whole
+ * screen. When the run settles, the slot is dropped and all tool rows collapse
+ * into one summary line ("Thought for 4s, searched for 1 pattern, ran 3 shell
+ * commands") that sits right above the final answer. Ctrl+O (or a click on the
+ * summary) reveals the rows again; `/cc-tools on|off|toggle|reveal|hide`
+ * controls the renderer.
  *
  * Nothing here touches model messages or the session transcript semantics; the
  * only persisted data is a `cc-tools-summary` custom entry used to render the
@@ -23,6 +27,9 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 
 const PATCH = Symbol.for("cc-tools:patch:v1");
 const THINKING_FILTER = Symbol.for("cc-tools:thinking-filter:v1");
+/** Container a tool component was added to, so a row can tell whether a newer one follows. */
+const PARENT = Symbol.for("cc-tools:parent:v1");
+const PARENT_TRACKING = Symbol.for("cc-tools:parent-tracking:v1");
 /** Bumped when the patch layout changes, so a reload can migrate older state. */
 const PATCH_VERSION = 2;
 /** New object on every module evaluation: tells a reload from a repeated install. */
@@ -39,6 +46,13 @@ const ROW_PAD = " ";
  * tool is still readable; a call that replaced it hides it at once.
  */
 const LIVE_DWELL_MS = 900;
+/**
+ * Height the activity area keeps while a run is going: the gap above the row,
+ * the row, and its command line. The transcript follows the terminal bottom, so
+ * a line that appears or disappears there scrolls the whole screen; holding the
+ * slot at the height of the tallest row is what keeps the output below it still.
+ */
+const LIVE_SLOT_LINES = 3;
 
 /** Opt-in tracing: set PI_CC_TOOLS_DEBUG=/path/to/log to capture what the rows do. */
 function trace(message: string): void {
@@ -447,22 +461,72 @@ function runOf(st: PatchState, component: any): Run | null {
  * by object identity: pi recreates components on tree navigation, compaction,
  * and resume, and a remembered instance would hide every row.
  */
-function liveToolId(run: Run | null | undefined): string | undefined {
-	if (!run) return undefined;
-	const progress = run.progress;
-	if (progress) {
-		for (let index = run.toolIds.length - 1; index >= 0; index--) {
-			const id = run.toolIds[index];
-			const state = progress.get(id);
-			if (state?.started && !state.done) return id;
-		}
+/** The newest call of the run that is still executing: it owns the activity row. */
+function runningToolId(run: Run | null | undefined): string | undefined {
+	const progress = run?.progress;
+	if (!progress) return undefined;
+	for (let index = run.toolIds.length - 1; index >= 0; index--) {
+		const id = run.toolIds[index];
+		const state = progress.get(id);
+		if (state?.started && !state.done) return id;
 	}
-	return summaryOwner(run);
+	return undefined;
+}
+
+/** The newest call the transcript already has a component for. */
+function newestRenderedId(run: Run): string | undefined {
+	const progress = run.progress;
+	if (!progress) return undefined;
+	for (let index = run.toolIds.length - 1; index >= 0; index--) {
+		const id = run.toolIds[index];
+		if (progress.has(id)) return id;
+	}
+	return undefined;
 }
 
 /** The summary belongs to the newest announced call; without one, to the last seen. */
 function summaryOwner(run: Run): string | undefined {
 	return run.lastToolId ?? run.lastSeenId;
+}
+
+/**
+ * The call that holds the reserved slot: the executing one, else the newest
+ * call that has a component. Pi creates the next call's component while the
+ * model is still streaming it — long before the call is announced or starts —
+ * and the slot has to move to that component at once. Leaving it on an older
+ * announced call would drop it: the old row yields to its successor while the
+ * successor is not the owner yet, and nothing fills the slot for those frames.
+ */
+function slotOwner(run: Run): string | undefined {
+	return runningToolId(run) ?? newestRenderedId(run);
+}
+
+/**
+ * The newest drawable tool row after this one in the transcript, if any. Pi
+ * appends components in order and a successor renders after this row in the
+ * same frame, so the two must never reserve a slot each.
+ */
+function successorRow(component: any): any {
+	const children = component[PARENT]?.children;
+	if (!Array.isArray(children)) return undefined;
+	const own = children.lastIndexOf(component);
+	for (let index = children.length - 1; index > own; index--) {
+		const sibling = children[index];
+		if (sibling instanceof ToolExecutionComponent && !(sibling as any).hideComponent) return sibling;
+	}
+	return undefined;
+}
+
+/** Fill a live row up to the slot height, so a short row leaves the same gap. */
+function inSlot(lines: string[]): string[] {
+	const padded = lines.slice();
+	while (padded.length < LIVE_SLOT_LINES) padded.push("");
+	return padded;
+}
+
+/** The blank slot a hidden row still holds, so the screen does not jump. */
+function blankSlot(): string[] {
+	return new Array<string>(LIVE_SLOT_LINES).fill("");
 }
 
 function liveRow(st: PatchState, component: any, width: number): string[] {
@@ -500,14 +564,14 @@ function liveRows(st: PatchState, component: any, width: number): string[] {
 	if (stillRunning(component)) {
 		stopDwell(st);
 		if (!st.liveShownAt.has(id)) st.liveShownAt.set(id, now);
-		return liveRow(st, component, width);
+		return inSlot(liveRow(st, component, width));
 	}
 	const shownAt = st.liveShownAt.get(id) ?? now;
 	st.liveShownAt.set(id, shownAt);
 	const remaining = shownAt + LIVE_DWELL_MS - now;
 	if (remaining <= 0) return [];
 	armDwell(st, component.ui, remaining);
-	return liveRow(st, component, width);
+	return inSlot(liveRow(st, component, width));
 }
 
 function summaryRow(st: PatchState, run: Run, width: number): string[] {
@@ -596,6 +660,35 @@ function disableStaleWrappers(proto: any, keep: PatchState | null): void {
 	}
 }
 
+type ParentTrackingState = {
+	loadToken?: symbol;
+	/** Untouched `addChild`, recorded so a reload can replace the stale closure. */
+	originalAddChild?: (this: unknown, child: unknown) => unknown;
+};
+
+/**
+ * Remember the container a tool component was added to. Pi appends transcript
+ * components in order, so this is what lets a row know a newer one already
+ * exists — without it a replaced row and its successor both hold the slot for
+ * one frame, which is exactly the jump the slot is meant to prevent.
+ */
+function installParentTracking(): void {
+	const containerProto = Object.getPrototypeOf(ToolExecutionComponent.prototype) as any;
+	const previous = containerProto[PARENT_TRACKING] as ParentTrackingState | undefined;
+	if (previous?.loadToken === LOAD_TOKEN) return;
+	const originalAddChild = previous?.originalAddChild ?? containerProto.addChild;
+	if (typeof originalAddChild !== "function") return;
+	containerProto.addChild = function (child: any) {
+		try {
+			if (child instanceof ToolExecutionComponent) (child as any)[PARENT] = this;
+		} catch {
+			// Best effort: a row without a parent still renders, it just reserves.
+		}
+		return originalAddChild.call(this, child);
+	};
+	containerProto[PARENT_TRACKING] = { loadToken: LOAD_TOKEN, originalAddChild };
+}
+
 function installPatch(): PatchState {
 	const proto = ToolExecutionComponent.prototype as any;
 	const previous = findPatchState(proto);
@@ -651,24 +744,32 @@ function installPatch(): PatchState {
 		// Revealed runs keep one compact row per call, like a plain activity log.
 		if (st.revealAll) return fallbackRow(this, width);
 		const run = runOf(st, this);
+		const owner = run && !run.finished ? slotOwner(run) : undefined;
 		let decision = "no-run";
-		if (run) {
-			if (!run.finished) decision = this.toolCallId === liveToolId(run) ? "live" : "hidden";
-			else decision = this.toolCallId === summaryOwner(run) ? "summary" : "hidden";
-		}
+		if (run?.finished) decision = this.toolCallId === summaryOwner(run) ? "summary" : "hidden";
+		else if (run) decision = this.toolCallId === owner ? "live" : "hidden";
 		const key = `${decision}|${this.result ? 1 : 0}|${this.executionStarted ? 1 : 0}|${run?.finished ? 1 : 0}`;
 		if (this.__ccDecision !== key) {
 			this.__ccDecision = key;
 			if (process.env.PI_CC_TOOLS_DEBUG) {
-				trace(`R id=${this.toolCallId} name=${this.toolName} ${decision} res=${this.result ? 1 : 0} exec=${this.executionStarted ? 1 : 0} fin=${run?.finished ? 1 : 0} live=${liveToolId(run)} ui=${typeof this.ui?.requestRender}`);
+				const successor = successorRow(this) ? "next" : "own";
+				trace(`R id=${this.toolCallId} name=${this.toolName} ${decision} res=${this.result ? 1 : 0} exec=${this.executionStarted ? 1 : 0} fin=${run?.finished ? 1 : 0} owner=${owner} slot=${successor} ui=${typeof this.ui?.requestRender}`);
 			}
 		}
 		if (!run) return fallbackRow(this, width);
 		if (run.finished) return this.toolCallId === summaryOwner(run) ? summaryRow(st, run, width) : [];
-		if (this.toolCallId !== liveToolId(run)) return [];
+		if (this.toolCallId !== slotOwner(run)) return [];
 		// A finished call must not keep claiming to run while the model thinks:
-		// its held row collapses once the dwell window is over.
-		return liveRows(st, this, width);
+		// its held row collapses once the dwell window is over, leaving the slot
+		// blank instead of dropping it — nothing below may move.
+		const rows = liveRows(st, this, width);
+		if (rows.length > 0) {
+			// A finished call's row yields the moment a newer row exists: the next
+			// call replaces it at once instead of drawing beside it for a frame.
+			if (!stillRunning(this) && successorRow(this)) return [];
+			return rows;
+		}
+		return successorRow(this) ? [] : blankSlot();
 	};
 
 	proto.handleMouse = function (event: any): any {
@@ -728,6 +829,7 @@ function installThinkingFilter(): void {
 
 export default function (pi: ExtensionAPI) {
 	const st = installPatch();
+	installParentTracking();
 	installThinkingFilter();
 
 	st.live = null;
