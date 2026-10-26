@@ -29,6 +29,7 @@ CC_TOOLS_EXTENSION=/tmp/variant.ts npm test
 | File | Covers |
 | --- | --- |
 | `live-row.test.mjs` | verb/detail per tool, command line, program extraction, path shortening, one-row rule, a finished row kept with its check/cross until the next call or the summary, hand-over only once the call's arguments are complete, `hideComponent`, expanded fallback, output never leaking into a row, the fixed-height activity slot and its hand-over between calls |
+| `codemode.test.mjs` | the script preview line (`// @options:` and blank lines skipped), nested tool/MCP calls with status, preview and duration, the newest-eight window with its "earlier calls" hint, cancelled calls of an aborted script, the raised activity slot a tall row leaves behind, width truncation, the `result.details.calls` fallback after a reload, reveal mode, and counter isolation (one `codemode` call, never one per nested call) |
 | `summary.test.mjs` | category phrases and their order, singular/plural, `×N` list for other tools, mcp name shortening, thinking threshold, `1m`/`2m 5s` durations, worked-time fallback, the summary band (marker, rule, blank lines), one summary per run, replay counts |
 | `layout.test.mjs` | widths 1…200 for live/summary/fallback rows, the rule spanning each width, the one-column band without a rule, zero and negative widths, ellipsis cut, ANSI styling not inflating the measured width |
 | `state.test.mjs` | `agent_before_settle` / `agent_settled` persistence, settle idempotency, new prompt vs custom-message runs, `agent_start` reopening, `message_end` counting and dedupe, `session_start`/`session_shutdown` resets, replay of a whole branch |
@@ -99,4 +100,9 @@ Each of these was a real bug; the test named in brackets fails if it comes back.
 | The slot vanishing while the model streams the next call's arguments | `live-row: a call whose component appears before it is announced keeps the slot` |
 | Empty `Running… · 0s` flashing, then the command growing chunk by chunk while arguments stream | `live-row: the first call draws nothing while its arguments are still streaming`, `live-row: a call whose component appears before it is announced keeps the slot` |
 | The reserved slot surviving into the settled summary | `live-row: the reservation is dropped when the run settles` |
+| A `codemode` row saying only `code` while the script's work stays invisible | `codemode: a codemode call shows its first meaningful script line`, `codemode: nested calls are drawn under the codemode row with status and duration` |
+| Nested calls counted as the main agent's work | `codemode: the summary still counts one codemode call, never a call per nested tool` |
+| A subagent's script listing its calls under the main agent's row | `codemode: a call the transcript never announced is not tracked (a subagent's script)` |
+| The activity area shrinking when a tall codemode row hands the line over | `codemode: a tall codemode row raises the slot for the rest of the run` |
+| Nested calls vanishing after `/reload` | `codemode: the row falls back to codemode's own call log when the events are gone` |
 | Parent tracking wrapped twice after `/reload` | `reload: a reload rebuilds parent tracking without stacking` |
