@@ -92,7 +92,7 @@ test("revealed rows never leak tool output and mark errors", async () => {
 test("an unknown option is rejected without changing state", async () => {
 	await command("on");
 	await command("onf");
-	assert.equal(lastNotice().message, "Usage: /cc-tools on|off|toggle|reveal|hide");
+	assert.equal(lastNotice().message, "Usage: /cc-tools [on|off|toggle|reveal|hide]");
 	assert.equal(lastNotice().level, "error");
 	assert.equal((await settledRun()).box.rows().length > 0, true, "renderer still active");
 });

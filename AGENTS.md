@@ -67,7 +67,7 @@ git ls-remote origin 'refs/tags/vX.Y.Z^{}'
 Both must pass before reporting work as done:
 
 ```bash
-npm test          # node tests/run.mjs — 105 offline tests, no model, no terminal
+npm test          # node tests/run.mjs — 138 offline tests, no model, no terminal
 npm run typecheck # tsc --noEmit, no build step
 ```
 
@@ -87,6 +87,8 @@ npm run typecheck # tsc --noEmit, no build step
 - Display-only. Never mutate messages, tool results or the session transcript. The only session
   write allowed is the `cc-tools-summary` custom entry holding the run's timings; counts are
   re-derived from assistant messages so replays stay correct.
+- The renderer settings (`enabled`, `revealAll`) persist to `cc-tools.json` in the agent directory
+  (`getAgentDir()`), written best-effort: a failed write must not affect the in-memory state.
 - Patch state lives on `ToolExecutionComponent.prototype` under
   `Symbol.for("cc-tools:patch:v1")` (and the placeholder filter under
   `Symbol.for("cc-tools:thinking-filter:v1")`). Version the symbol key if the state shape changes

@@ -37,6 +37,7 @@ CC_TOOLS_EXTENSION=/tmp/variant.ts npm test
 | `pulse.test.mjs` | the live marker's glow: the phase curve (bounded, a pure function of the clock), hue and chroma held while the lightness travels both sides of the accent, one-cell width at every phase, animation cadence, plain fallback without concrete theme colours (including a custom theme handing out strings), static dot on a finished row, static summary band, the timer stopping on `/cc-tools off` and `reveal` |
 | `thinking.test.mjs` | hidden-thinking placeholder removal, blank-line cleanup, thinking-only messages, label-driven matching, behaviour when compact tools are off |
 | `commands.test.mjs` | `/cc-tools on\|off\|toggle\|reveal\|hide`, invalid option, click-to-reveal, clicks that belong to the host |
+| `settings.test.mjs` | the `/cc-tools` menu (opens with the persisted values, a change is applied and written, escape closes it, a non-TUI mode is refused, a corrupt file falls back) and the settings file: the state written by an earlier session is restored on install, shortcuts persist as well |
 | `reload.test.mjs` | `/reload` semantics: an older copy's wrapper switched off, a repeated install not stacking, a reload swapping closures while keeping counters, the new code rendering immediately, the thinking filter rebuilding, parent tracking rebuilt |
 | `robustness.test.mjs` | legacy patch state disabled on load, double install (`/reload`) not double-wrapping, orphan components, missing `toolCallId`, missing theme, throwing lifecycle context, opt-in tracing |
 

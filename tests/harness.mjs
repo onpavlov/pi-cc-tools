@@ -11,14 +11,22 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const TESTS_DIR = here;
+/**
+ * Settings persist next to pi's own config, so every test process gets a scratch
+ * agent directory: a run must never rewrite the developer's real cc-tools.json.
+ */
+export const AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-tools-agent-"));
+process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
+/** Path the extension persists the renderer settings to. */
+export const SETTINGS_PATH = join(AGENT_DIR, "cc-tools.json");
 /** CC_TOOLS_EXTENSION lets the mutation checks run a modified copy. */
 export const EXTENSION_PATH = process.env.CC_TOOLS_EXTENSION ?? join(here, "..", "extensions", "cc-tools", "index.ts");
 

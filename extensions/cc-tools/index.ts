@@ -12,20 +12,58 @@
  * row collapses into one summary line ("Thought for 4s, searched for 1 pattern,
  * ran 3 shell commands") that sits right above the final answer. Ctrl+O (or a
  * click on the summary) reveals the rows again;
- * `/cc-tools on|off|toggle|reveal|hide` controls the renderer.
+ * `/cc-tools` opens a settings menu; `/cc-tools on|off|toggle|reveal|hide`
+ * still works as a shortcut.
  *
  * Nothing here touches model messages or the session transcript semantics; the
- * only persisted data is a `cc-tools-summary` custom entry used to render the
- * same summary when the session is replayed.
+ * only session write is a `cc-tools-summary` custom entry used to render the
+ * same summary when the session is replayed. The renderer settings are the one
+ * thing kept outside the session, in `cc-tools.json` under the agent directory,
+ * so `/cc-tools` carries them from one session to the next.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
 	AssistantMessageComponent,
 	ToolExecutionComponent,
 	type ExtensionAPI,
+	getAgentDir,
+	getSettingsListTheme,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { type Color, colorToOklch, oklchColor, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	type Color,
+	Container,
+	type SettingItem,
+	SettingsList,
+	Text,
+	colorToOklch,
+	oklchColor,
+	truncateToWidth,
+} from "@earendil-works/pi-tui";
+
+const SETTINGS_FILE = (): string => join(getAgentDir(), "cc-tools.json");
+
+function loadSettings(): { enabled?: boolean; revealAll?: boolean } {
+	try {
+		const raw = JSON.parse(readFileSync(SETTINGS_FILE(), "utf8"));
+		const out: { enabled?: boolean; revealAll?: boolean } = {};
+		if (typeof raw?.enabled === "boolean") out.enabled = raw.enabled;
+		if (typeof raw?.revealAll === "boolean") out.revealAll = raw.revealAll;
+		return out;
+	} catch {
+		return {};
+	}
+}
+
+function saveSettings(settings: { enabled: boolean; revealAll: boolean }): void {
+	try {
+		mkdirSync(dirname(SETTINGS_FILE()), { recursive: true });
+		writeFileSync(SETTINGS_FILE(), `${JSON.stringify(settings, null, 2)}\n`);
+	} catch {
+		// Persisting is best effort; the in-memory state still applies.
+	}
+}
 
 const PATCH = Symbol.for("cc-tools:patch:v1");
 const THINKING_FILTER = Symbol.for("cc-tools:thinking-filter:v1");
@@ -1008,6 +1046,7 @@ function installPatch(): PatchState {
 	st.thinkingStartAt ??= 0;
 	st.enabled ??= true;
 	st.revealAll ??= false;
+	Object.assign(st, loadSettings());
 	st.live ??= null;
 	st.version = PATCH_VERSION;
 	st.loadToken = LOAD_TOKEN;
@@ -1099,6 +1138,60 @@ function installThinkingFilter(): void {
 		return kept;
 	};
 	proto[THINKING_FILTER] = { version: PATCH_VERSION, loadToken: LOAD_TOKEN, originalRender };
+}
+
+/**
+ * The `/cc-tools` menu: the settings list pi uses for its own /settings, with
+ * this extension's two switches on it. Changes apply at once and are written to
+ * the settings file by `persist`.
+ */
+async function showSettingsMenu(ctx: ExtensionContext, state: PatchState, persist: () => void): Promise<void> {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify("/cc-tools menu needs TUI mode; use /cc-tools on|off|toggle|reveal|hide", "error");
+		return;
+	}
+	const items: SettingItem[] = [
+		{
+			id: "enabled",
+			label: "Claude Code style rows",
+			description: "Collapse tool calls into one live line and a summary",
+			currentValue: state.enabled ? "on" : "off",
+			values: ["on", "off"],
+		},
+		{
+			id: "rows",
+			label: "Tool rows",
+			description: "live line: only the newest row; all rows: show every tool row",
+			currentValue: state.revealAll ? "all rows" : "live line",
+			values: ["live line", "all rows"],
+		},
+	];
+	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+		const container = new Container();
+		container.addChild(new Text(theme.fg("accent", theme.bold("cc-tools settings"))));
+		container.addChild(new Text(""));
+		const list = new SettingsList(
+			items,
+			items.length + 2,
+			getSettingsListTheme(),
+			(id, value) => {
+				if (id === "enabled") state.enabled = value === "on";
+				else if (id === "rows") state.revealAll = value === "all rows";
+				persist();
+				tui.requestRender();
+			},
+			() => done(undefined),
+		);
+		container.addChild(list);
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput(data: string) {
+				list.handleInput?.(data);
+				tui.requestRender();
+			},
+		};
+	});
 }
 
 export default function (pi: ExtensionAPI) {
@@ -1263,13 +1356,25 @@ export default function (pi: ExtensionAPI) {
 		st.slotLines = LIVE_SLOT_LINES;
 	});
 
+	// Every way of changing the state ends here: nothing animates while the
+	// renderer is off or every row is revealed, so the pulse timer must stop
+	// asking for frames, and the change is written out for the next session.
+	const applyState = (): void => {
+		if (!st.enabled || st.revealAll) stopTicker(st);
+		saveSettings({ enabled: st.enabled, revealAll: st.revealAll });
+	};
+
 	pi.registerCommand("cc-tools", {
-		description: "Claude-Code-style tool rows: on/off/toggle/reveal/hide (Ctrl+O expands)",
+		description: "Claude-Code-style tool rows settings (Ctrl+O expands)",
 		async handler(args: string, ctx: ExtensionContext) {
 			const option = args.trim().toLowerCase();
 			const allowed = ["on", "off", "toggle", "reveal", "hide"];
-			if (option && !allowed.includes(option)) {
-				ctx.ui.notify("Usage: /cc-tools on|off|toggle|reveal|hide", "error");
+			if (!option) {
+				await showSettingsMenu(ctx, st, applyState);
+				return;
+			}
+			if (!allowed.includes(option)) {
+				ctx.ui.notify("Usage: /cc-tools [on|off|toggle|reveal|hide]", "error");
 				return;
 			}
 			if (option === "reveal") st.revealAll = true;
@@ -1277,9 +1382,7 @@ export default function (pi: ExtensionAPI) {
 			else if (option === "on") st.enabled = true;
 			else if (option === "off") st.enabled = false;
 			else st.enabled = !st.enabled;
-			// Nothing animates while the renderer is off or every row is revealed:
-			// stop asking for frames instead of letting the pulse timer run unseen.
-			if (!st.enabled || st.revealAll) stopTicker(st);
+			applyState();
 			let status = "off";
 			if (st.enabled) status = st.revealAll ? "on · all rows" : "on · live line";
 			ctx.ui.notify(`cc-tools: ${status}`, "info");

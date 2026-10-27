@@ -97,10 +97,15 @@ nothing counted.
 
 | Action | Effect |
 | --- | --- |
-| `/cc-tools on` · `off` · `toggle` | Enable or disable the renderer |
+| `/cc-tools` | Open a settings menu (like `/settings`): renderer on/off, live line vs all rows |
+| `/cc-tools on` · `off` · `toggle` | Shortcut: enable or disable the renderer |
 | `/cc-tools reveal` · `hide` | Show every call as a compact one-liner, or collapse again |
 | Click the summary row | Toggle the same reveal |
 | `Ctrl+O` on a call | Expand that call to Pi's full output |
+
+Both settings are saved: the renderer state and the row mode go to
+`~/.pi/agent/cc-tools.json` (`$PI_CODING_AGENT_DIR` when pi runs with its own agent directory) and
+are restored on the next start. The command-line shortcuts write the same file.
 
 ## How counting works
 
@@ -135,7 +140,7 @@ when the elapsed timer arms and fires, and what a settle persisted.
 ## Development
 
 ```bash
-npm test        # 131 offline tests, no model and no terminal
+npm test        # 138 offline tests, no model and no terminal
 ```
 
 The tests import the extension through `jiti` the same way Pi does, drive lifecycle events through a
