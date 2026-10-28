@@ -69,7 +69,7 @@ test("reveal and hide switch between compact rows and the call list", async () =
 	const { box } = await settledRun();
 	await command("reveal");
 	assert.equal(lastNotice().message, "cc-tools: on · all rows");
-	assert.equal(box.rows()[0], "● bash(git status)", "revealed row names the call");
+	assert.match(box.rows()[0], /Running git/, "revealed row names the call");
 
 	await command("hide");
 	assert.equal(lastNotice().message, "cc-tools: on · live line");
@@ -84,7 +84,7 @@ test("revealed rows never leak tool output and mark errors", async () => {
 	failed.markExecutionStarted();
 	failed.updateResult(toolResult({ isError: true }));
 	assert.ok(!box.text().includes(HIDDEN_OUTPUT));
-	assert.match(box.rows()[0], /● bash\(git status\) ✗$/);
+	assert.match(box.rows()[0], /Running git.*✗$/);
 	await command("hide");
 	assert.ok(call);
 });
@@ -101,7 +101,7 @@ test("clicking the summary row reveals and hides the calls", async () => {
 	const { box, call } = await settledRun();
 	const click = { type: "click", button: "left", x: 1, y: 1, height: 5, width: 80 };
 	assert.deepEqual(call.handleMouse(click), { handled: true }, "click on the summary is consumed");
-	assert.equal(box.rows()[0], "● bash(git status)", "first click reveals");
+	assert.match(box.rows()[0], /Running git/, "first click reveals");
 
 	call.handleMouse(click);
 	assert.match(box.rows()[0], /ran 1 shell command/, "second click hides again");

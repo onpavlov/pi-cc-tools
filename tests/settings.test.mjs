@@ -76,7 +76,7 @@ test("outside the TUI the menu points at the shortcuts", async () => {
 
 test("the state written by an earlier session is applied on install", async () => {
 	const { box } = await settledRun();
-	assert.equal(box.rows()[0], "● bash(git status)", "revealed rows come back");
+	assert.match(box.rows()[0], /Running git/, "revealed rows come back");
 });
 
 test("the menu opens with both settings at their persisted values", async () => {

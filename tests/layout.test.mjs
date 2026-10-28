@@ -142,6 +142,45 @@ test("truncation marks the cut with an ellipsis rather than slicing a wide chara
 	assert.ok(row.endsWith("…"), row);
 });
 
+test("all rows mode keeps every call on its own row and closes with the summary", async () => {
+	await startRun();
+	await emit(
+		"message_end",
+		{
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "ar-1", name: "bash", arguments: {} },
+					{ type: "toolCall", id: "ar-2", name: "bash", arguments: {} },
+				],
+			},
+		},
+		{ ui },
+	);
+	await emit("agent_before_settle", {}, { ui });
+	const box = tree();
+	const first = box.add(tool("bash", "ar-1", { command: "git status" }));
+	first.markExecutionStarted();
+	first.updateResult(toolResult({ durationMs: 1200 }));
+	const last = box.add(tool("bash", "ar-2", { command: "ls" }));
+	last.markExecutionStarted();
+	last.updateResult(toolResult({ durationMs: 300 }));
+
+	// Clicking the summary owner toggles all-rows mode, the same path the UI uses.
+	const click = { type: "click", button: "left", x: 1, y: 1, height: 5, width: 80 };
+	assert.deepEqual(last.handleMouse(click), { handled: true }, "the summary click is consumed");
+
+	const rows = box.rows(80);
+	// Both calls keep their row: each has a Running line of its own.
+	assert.ok(rows.some((row) => row.includes("Running git")), "the first call kept its row");
+	assert.ok(rows.some((row) => row.includes("Running ls")), "the second call kept its row");
+	// The summary band closes the run as its last two rows.
+	assert.match(rows.at(-2), /ran 2 shell commands/, "the summary closes the band");
+	assert.match(rows.at(-1), /^ ─+$/, "the rule closes the band");
+	// Every width still fits.
+	for (const width of WIDTHS) assertFits(box.frame(width), width, `all-rows@${width}`);
+});
+
 test("ansi styling never inflates the measured width", async () => {
 	// The stub theme is plain; real themes wrap text in escapes. Both must fit.
 	await startRun();
