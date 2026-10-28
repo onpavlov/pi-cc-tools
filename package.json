@@ -1,6 +1,6 @@
 {
   "name": "pi-cc-tools",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Claude Code-style tool rows for Pi: one live activity line while a call runs, one summary line per turn.",
   "type": "module",
   "keywords": [
