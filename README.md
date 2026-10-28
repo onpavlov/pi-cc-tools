@@ -93,13 +93,33 @@ Phrases appear in a fixed order: thinking, search, read, edit, shell, agents, ot
 Durations switch to minutes (`Thought for 2m 5s`), and `Worked for Ns` is used when a run has
 nothing counted.
 
+**All rows mode** — choose `all rows` in `/cc-tools` (or `/cc-tools reveal`) to keep every call on
+screen instead of collapsing to the newest one. Each call keeps the same row shape the live line
+draws — marker, verb, duration, command line and nested calls — and the summary band closes the run
+as its last row, so consecutive calls never overwrite each other:
+
+```text
+ ● Running git · 1s ✓
+   └ $ git status
+
+ ● Running rg · 3s ✓
+   └ $ rg TODO src
+
+ ○ ran 2 shell commands
+ ─────────────────────────────────────────────────────────────────────────────────────
+```
+
+Rows are separated by a blank line and pass through `ROW_PAD` like the live row; long commands are
+truncated at the render width. A shell command that starts with `cd … &&` previews the actionable
+program (`Running rg`, not `Running cd`).
+
 ## Controls
 
 | Action | Effect |
 | --- | --- |
 | `/cc-tools` | Open a settings menu (like `/settings`): renderer on/off, live line vs all rows |
 | `/cc-tools on` · `off` · `toggle` | Shortcut: enable or disable the renderer |
-| `/cc-tools reveal` · `hide` | Show every call as a compact one-liner, or collapse again |
+| `/cc-tools reveal` · `hide` | Show every call as its own row, or collapse to the live line |
 | Click the summary row | Toggle the same reveal |
 | `Ctrl+O` on a call | Expand that call to Pi's full output |
 

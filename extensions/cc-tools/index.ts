@@ -416,6 +416,13 @@ function programOf(command: string): string {
 		}
 		if (token.includes("=")) continue;
 		if (token === "sudo" || token === "env" || token === "command") continue;
+		// `cd /work && rg …`: the directory says nothing about what the command does.
+		if (token === "cd") {
+			const next = tokens[index];
+			if (next && !["&&", "||", ";", "|"].includes(next)) index += 1;
+			continue;
+		}
+		if (token === "&&" || token === "||" || token === ";" || token === "|") continue;
 		return token;
 	}
 	return "";
@@ -854,6 +861,27 @@ function liveRow(st: PatchState, component: any, width: number): string[] {
 }
 
 /**
+ * A static row for "all rows" mode: the same shape the live line draws, without
+ * the pulse or the ticker. Every call keeps its row, so consecutive calls never
+ * replace one another; the summary band is appended by the summary owner.
+ */
+function revealedRow(st: PatchState, component: any, width: number): string[] {
+	const style = styler(st);
+	const { verb, detail, title, command, commandPrefix } = describeTool(component);
+	const label = title ?? (detail ? `${verb} ${detail}` : `${verb}…`);
+	const seconds = elapsedSeconds(st, component);
+	const running = stillRunning(component);
+	const failed = component.result?.isError === true;
+	const dot = style.fg("accent", "●");
+	const marker = running ? "" : ` ${style.fg(failed ? "error" : "success", failed ? "✗" : "✓")}`;
+	const head = `${dot} ${style.fg("toolTitle", label)}${style.fg("dim", ` · ${duration(seconds)}`)}${marker}`;
+	const lines = [`${ROW_PAD}${head}`];
+	if (command) lines.push(`${ROW_PAD}  ${style.fg("dim", `└ ${commandPrefix ?? ""}`)}${style.fg("muted", command)}`);
+	lines.push(...nestedRows(st, component, style));
+	return ["", ...lines.map((line) => truncateToWidth(line, width, "…"))];
+}
+
+/**
  * Marker of the summary band. Deliberately not the tool-row bullet: a call row
  * reports what is happening, the summary reports what happened.
  */
@@ -1056,8 +1084,17 @@ function installPatch(): PatchState {
 	proto.render = function (width: number): string[] {
 		if (!st.enabled || this.expanded) return originalRender.call(this, width);
 		if (this.hideComponent || width < 1) return [];
-		// Revealed runs keep one compact row per call, like a plain activity log.
-		if (st.revealAll) return fallbackRow(this, width);
+		// In all rows mode every call keeps its own row; the summary band closes the run.
+		if (st.revealAll) {
+			const run = runOf(st, this);
+			const summary = run !== null && run.finished && this.toolCallId === summaryOwner(run);
+			if (process.env.PI_CC_TOOLS_DEBUG) {
+				trace(`R id=${this.toolCallId} name=${this.toolName} revealed res=${this.result ? 1 : 0} exec=${this.executionStarted ? 1 : 0} fin=${run?.finished ? 1 : 0} summary=${summary ? 1 : 0}`);
+			}
+			const rows = revealedRow(st, this, width);
+			if (run !== null && summary) return [...rows, ...summaryRow(st, run, width)];
+			return rows;
+		}
 		const run = runOf(st, this);
 		const owner = run && !run.finished ? slotOwner(st, run) : undefined;
 		const id = String(this.toolCallId);

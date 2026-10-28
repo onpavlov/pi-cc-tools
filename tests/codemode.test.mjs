@@ -261,10 +261,14 @@ test("/cc-tools reveal shows the script instead of the argument keys", async () 
 	await announce("cm-reveal");
 	const { box, call } = await codemodeBox("cm-reveal");
 	await command("reveal");
-	assert.equal(
+	assert.match(
 		box.rows()[0],
-		'● codemode const found = await searchTools("rank");',
+		/● codemode/,
 		"the revealed row names what the script does",
+	);
+	assert.ok(
+		box.rows().some((row) => row.includes('const found = await searchTools("rank");')),
+		"the script line is shown under the row",
 	);
 	call.updateResult(toolResult({ isError: true }));
 	assert.match(box.rows()[0], / ✗$/);
