@@ -160,7 +160,7 @@ when the elapsed timer arms and fires, and what a settle persisted.
 ## Development
 
 ```bash
-npm test        # 138 offline tests, no model and no terminal
+npm test        # 140 offline tests, no model and no terminal
 ```
 
 The tests import the extension through `jiti` the same way Pi does, drive lifecycle events through a

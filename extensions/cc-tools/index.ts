@@ -790,6 +790,32 @@ function slotOwner(st: PatchState, run: Run): string | undefined {
 }
 
 /**
+ * A component records its own execution state only when it renders, so a newer
+ * running call that has not rendered yet is invisible to the older sibling
+ * drawn before it in the same frame — and both would hold the line for one
+ * frame, growing the transcript and scrolling the screen. Refresh every sibling
+ * of the run first, so the owner does not depend on render order.
+ */
+function syncRunProgress(st: PatchState, component: any, run: Run): void {
+	const children = component[PARENT]?.children;
+	if (!Array.isArray(children)) return;
+	let progress = run.progress;
+	if (!progress) {
+		progress = new Map();
+		run.progress = progress;
+	}
+	for (const sibling of children) {
+		if (!(sibling instanceof ToolExecutionComponent) || (sibling as any).hideComponent) continue;
+		const id = String((sibling as any).toolCallId);
+		if (!run.toolIds.includes(id)) continue;
+		const state = progress.get(id) ?? { started: false, done: false };
+		if ((sibling as any).executionStarted) state.started = true;
+		if (!stillRunning(sibling)) state.done = true;
+		progress.set(id, state);
+	}
+}
+
+/**
  * The newest drawable tool row after this one in the transcript, if any. Pi
  * appends components in order and a successor renders after this row in the
  * same frame, so the two must never reserve a slot each. A successor whose row
@@ -1096,6 +1122,7 @@ function installPatch(): PatchState {
 			return rows;
 		}
 		const run = runOf(st, this);
+		if (run && !run.finished) syncRunProgress(st, this, run);
 		const owner = run && !run.finished ? slotOwner(st, run) : undefined;
 		const id = String(this.toolCallId);
 		const settled = st.settled?.has(id) === true;

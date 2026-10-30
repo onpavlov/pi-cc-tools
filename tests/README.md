@@ -28,7 +28,7 @@ CC_TOOLS_EXTENSION=/tmp/variant.ts npm test
 
 | File | Covers |
 | --- | --- |
-| `live-row.test.mjs` | verb/detail per tool, command line, program extraction, path shortening, one-row rule, a finished row kept with its check/cross until the next call or the summary, hand-over only once the call's arguments are complete, `hideComponent`, expanded fallback, output never leaking into a row, the fixed-height activity slot and its hand-over between calls |
+| `live-row.test.mjs` | verb/detail per tool, command line, program extraction, path shortening, one-row rule, a finished row kept with its check/cross until the next call or the summary, hand-over only once the call's arguments are complete, two calls running at once still keeping a single row, `hideComponent`, expanded fallback, output never leaking into a row, the fixed-height activity slot and its hand-over between calls |
 | `codemode.test.mjs` | the script preview line (`// @options:` and blank lines skipped), nested tool/MCP calls with status, preview and duration, the newest-eight window with its "earlier calls" hint, cancelled calls of an aborted script, the raised activity slot a tall row leaves behind, width truncation, the `result.details.calls` fallback after a reload, reveal mode, and counter isolation (one `codemode` call, never one per nested call) |
 | `summary.test.mjs` | category phrases and their order, singular/plural, `×N` list for other tools, mcp name shortening, thinking threshold, `1m`/`2m 5s` durations, worked-time fallback, the summary band (marker, rule, blank lines), one summary per run, replay counts |
 | `layout.test.mjs` | widths 1…200 for live/summary/fallback rows, all-rows mode keeping every call's row and closing with the summary band last, the rule spanning each width, the one-column band without a rule, zero and negative widths, ellipsis cut, ANSI styling not inflating the measured width |
@@ -106,6 +106,7 @@ Each of these was a real bug; the test named in brackets fails if it comes back.
 | Revealed rows flattening to one unseparated line per call | `layout: all rows mode keeps every call on its own row and closes with the summary` |
 | A long `bash` command labelled by its `cd …` prefix instead of the real program | `layout: all rows mode keeps every call on its own row and closes with the summary` |
 | Two rows holding the activity slot at once when a call is replaced | `live-row: only one call reserves the slot at a time`, `live-row: an announced call without a component does not drop the slot` |
+| Two concurrent tool calls each drawing a row for one frame (the transcript grows and the screen jumps) | `live-row: two calls running at once keep a single row` |
 | The slot vanishing while the model streams the next call's arguments | `live-row: a call whose component appears before it is announced keeps the slot` |
 | Empty `Running… · 0s` flashing, then the command growing chunk by chunk while arguments stream | `live-row: the first call draws nothing while its arguments are still streaming`, `live-row: a call whose component appears before it is announced keeps the slot` |
 | The reserved slot surviving into the settled summary | `live-row: the reservation is dropped when the run settles` |

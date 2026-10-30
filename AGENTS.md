@@ -67,7 +67,7 @@ git ls-remote origin 'refs/tags/vX.Y.Z^{}'
 Both must pass before reporting work as done:
 
 ```bash
-npm test          # node tests/run.mjs — 138 offline tests, no model, no terminal
+npm test          # node tests/run.mjs — 140 offline tests, no model, no terminal
 npm run typecheck # tsc --noEmit, no build step
 ```
 

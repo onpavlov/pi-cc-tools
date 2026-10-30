@@ -399,4 +399,32 @@ test("a live row never leaks tool output", async () => {
 	assert.ok(!box.text().includes(HIDDEN_OUTPUT));
 });
 
+test("two calls running at once keep a single row", async () => {
+	await freshRun();
+	// One assistant message announces both calls; pi runs them at the same time.
+	await emit(
+		"message_end",
+		{
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "par-1", name: "bash", arguments: {} },
+					{ type: "toolCall", id: "par-2", name: "bash", arguments: {} },
+				],
+			},
+		},
+		{ ui },
+	);
+	const box = tree();
+	const first = box.add(tool("bash", "par-1", { command: "echo one" }));
+	first.markExecutionStarted();
+	box.text(); // the first call already holds the line
+	const second = box.add(tool("bash", "par-2", { command: "echo two" }));
+	second.markExecutionStarted();
+	const text = box.text();
+	assert.equal(text.split("\n").filter((row) => row.includes("Running echo")).length, 1, `only one activity row at a time, got: ${JSON.stringify(text)}`);
+	assert.ok(text.includes("echo two"), "the newest running call holds the line");
+	assert.ok(!text.includes("echo one"), "the older running call yields the line");
+});
+
 await runTests("live-row");
