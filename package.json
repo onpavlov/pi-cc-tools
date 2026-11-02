@@ -18,6 +18,7 @@
   "license": "MIT",
   "files": [
     "extensions/",
+    "media/",
     "README.md",
     "LICENSE"
   ],
@@ -28,7 +29,9 @@
   "pi": {
     "extensions": [
       "./extensions/cc-tools/index.ts"
-    ]
+    ],
+    "image": "https://cdn.jsdelivr.net/gh/onpavlov/pi-cc-tools@main/media/pi-cc-tools_running.webp",
+    "video": "https://cdn.jsdelivr.net/gh/onpavlov/pi-cc-tools@main/media/pi-cc-tools_live-line_thinking-off.mp4"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

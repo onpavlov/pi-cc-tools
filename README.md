@@ -16,6 +16,25 @@ collapses into one summary band above the answer.
 
 Display only: model messages, tool results and the session transcript are never touched.
 
+## Demo
+
+The main clip is the thinking-off run: one live line, replaced call after call and never blank
+([`media/pi-cc-tools_live-line_thinking-off.mp4`](media/pi-cc-tools_live-line_thinking-off.mp4),
+2 min). Click the frame to play it.
+
+[![The live line while a call runs](media/pi-cc-tools_running.webp)](media/pi-cc-tools_live-line_thinking-off.mp4)
+
+## Screenshots
+
+Settings variations: thinking time on, the renderer switched off, the two row kinds, and the
+`/cc-tools` menu in each row mode.
+
+| | |
+| --- | --- |
+| **Thinking on** — [video](media/pi-cc-tools_live-line_thinking-on.mp4)<br>![Thinking on](media/pi-cc-tools_on.webp) | **Renderer off**<br>![Renderer off](media/pi-cc-tools_off.webp) |
+| **Editing a file**<br>![Editing a file](media/pi-cc-tools_editing.webp) | **`codemode` with nested calls**<br>![codemode with nested calls](media/pi-cc-tools_codemode.webp) |
+| **Settings — live line**<br>![Settings, live line](media/pi-cc-tools_settings-live-line.webp) | **Settings — all rows**<br>![Settings, all rows](media/pi-cc-tools_settings-all-rows.webp) |
+
 ## Install
 
 ```bash
@@ -177,6 +196,7 @@ See [`tests/README.md`](tests/README.md) for the file-by-file coverage map and t
 
 ```text
 extensions/cc-tools/index.ts   the extension
+media/                         demo video and screenshots (README and package gallery)
 tests/                         offline renderer and lifecycle tests
 ```
 
