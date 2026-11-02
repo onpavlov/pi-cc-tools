@@ -44,7 +44,7 @@ pi install git:github.com/onpavlov/pi-cc-tools
 Other sources:
 
 ```bash
-pi install npm:pi-cc-tools          # once published
+pi install npm:pi-cc-tools
 pi install ./pi-cc-tools            # local checkout
 pi -e ./pi-cc-tools/extensions/cc-tools/index.ts   # try it for one run
 ```

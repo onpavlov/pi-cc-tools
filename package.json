@@ -1,6 +1,6 @@
 {
   "name": "pi-cc-tools",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Claude Code-style tool rows for Pi: one live activity line while a call runs, one summary line per turn.",
   "type": "module",
   "keywords": [
@@ -22,6 +22,9 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  },
   "scripts": {
     "test": "node tests/run.mjs",
     "typecheck": "tsc --noEmit"
