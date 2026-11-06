@@ -182,8 +182,13 @@ type PatchState = {
 	enabled: boolean;
 	revealAll: boolean;
 	ui?: ExtensionContext["ui"];
-	/** Session the rows read their runs from: a lost run map is rebuilt from it. */
+	/**
+	 * Session that owns this state. One process can host a nested session (a
+	 * subagent), and only the owned one may drive the rows.
+	 */
 	sessionManager?: ExtensionContext["sessionManager"];
+	/** Set when the owning session shut down: the next session may take over. */
+	released?: boolean;
 	/** Last self-heal attempt, so a render cannot scan the branch on every frame. */
 	healAt?: number;
 	live: Run | null;
@@ -1291,23 +1296,57 @@ async function showSettingsMenu(ctx: ExtensionContext, state: PatchState, persis
 	});
 }
 
+/** Whether a session already owns the shared state. */
+function sessionHeld(st: PatchState): boolean {
+	return st.sessionManager !== undefined && st.released !== true;
+}
+
+/**
+ * Whether this event belongs to the session the rows follow. `@tintinweb/pi-subagents`
+ * runs a subagent through `createAgentSession`, so one process holds two sessions
+ * and evaluates this module again for the nested runner. Its `session_start` would
+ * replace the run map of the conversation on screen, and its settle would write
+ * its summary into the main run: only a session the user drives — `tui` mode,
+ * bound before any subagent exists — owns the state, and a session that shut down
+ * hands it to the next one, which is what `/new` and `/resume` need. A nested
+ * session binds without a UI context, so pi keeps its mode at `print`.
+ */
+function claimSession(st: PatchState, ctx: any): boolean {
+	const manager = ctx?.sessionManager;
+	// Events without a session (tests, direct calls) keep the current owner.
+	if (!manager) return true;
+	if (!sessionHeld(st)) {
+		st.sessionManager = manager;
+		st.released = false;
+		return true;
+	}
+	// A headless session — a subagent's — never takes the rows from a held owner.
+	if (ctx.mode !== undefined && ctx.mode !== "tui") return st.sessionManager === manager;
+	st.sessionManager = manager;
+	st.released = false;
+	return true;
+}
+
 export default function (pi: ExtensionAPI) {
 	const st = installPatch();
 	installParentTracking();
 	installThinkingFilter();
 
-	st.live = null;
-	st.toolStartAt.clear();
-	st.thinkingStartAt = 0;
-	stopTicker(st);
+	// A nested session builds its own runner and runs this factory again; resetting
+	// here would drop the live run of the conversation the user is looking at.
+	if (!sessionHeld(st)) {
+		st.live = null;
+		st.toolStartAt.clear();
+		st.thinkingStartAt = 0;
+		stopTicker(st);
+	}
 
 	// Every handler body is guarded: a throwing lifecycle hook would otherwise
-	// leave the rows permanently hidden with no summary.
+	// leave the rows permanently hidden with no summary. Handlers of a nested
+	// session are dropped before they can touch the shared state.
 	const on = (name: any, handler: any) =>
 		pi.on(name, (event: any, ctx: any) => {
-			// Kept for the self-heal: the branch has to be readable from a render,
-			// which pi may schedule before this load's `session_start` arrives.
-			if (ctx?.sessionManager) st.sessionManager = ctx.sessionManager;
+			if (!claimSession(st, ctx)) return undefined;
 			try {
 				return handler(event, ctx);
 			} catch {
@@ -1458,6 +1497,9 @@ export default function (pi: ExtensionAPI) {
 		// The map is empty from here on: the first row drawn before `session_start`
 		// hands the branch back has to be allowed to rebuild it at once.
 		st.healAt = undefined;
+		// The owner is gone: `/new` and `/resume` bring a different session, and it
+		// has to be able to claim the state.
+		st.released = true;
 	});
 
 	// Every way of changing the state ends here: nothing animates while the

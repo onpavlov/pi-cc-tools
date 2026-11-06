@@ -67,7 +67,7 @@ git ls-remote origin 'refs/tags/vX.Y.Z^{}'
 Both must pass before reporting work as done:
 
 ```bash
-npm test          # node tests/run.mjs — 142 offline tests, no model, no terminal
+npm test          # node tests/run.mjs — 147 offline tests, no model, no terminal
 npm run typecheck # tsc --noEmit, no build step
 ```
 
@@ -93,6 +93,11 @@ npm run typecheck # tsc --noEmit, no build step
   `Symbol.for("cc-tools:patch:v1")` (and the placeholder filter under
   `Symbol.for("cc-tools:thinking-filter:v1")`). Version the symbol key if the state shape changes
   incompatibly — `/reload` must keep the current turn's counters while swapping closures.
+- One process can hold a second session: `@tintinweb/pi-subagents` runs a subagent through
+  `createAgentSession`, which evaluates every extension again for a nested runner. Only a session
+  the user drives (`ctx.mode === "tui"`, bound before any subagent exists) may own the shared
+  state; a nested session's events must be dropped, or its `session_start` replaces the run map of
+  the conversation on screen. A session that shut down releases ownership for `/new` and `/resume`.
 - No new runtime dependencies. Peer deps are `@earendil-works/pi-coding-agent` and
   `@earendil-works/pi-tui` and must stay optional; dev tooling only if an existing dependency
   cannot do the job.
