@@ -3,7 +3,28 @@
 Releases before `0.8.4` are documented in the GitHub release notes:
 https://github.com/onpavlov/pi-cc-tools/releases
 
+## 0.8.5 - 2026-11-06
+
+### Fixed
+
+- Tool rows no longer break when a subagent runs. `@tintinweb/pi-subagents` runs a subagent through
+  `createAgentSession` in the same process, which evaluates every extension again for a nested
+  session: its `session_start` replaced the run map of the conversation on screen, so every row
+  fell back to `● tool(arguments)`, the turn lost its summary band, and nothing restored it —
+  the state belonged to the subagent from then on.
+- Only a session the user drives (`ctx.mode === "tui"`, bound before any subagent exists) owns the
+  renderer state now; events of a nested headless session are dropped, so a subagent's tool calls
+  no longer land in the parent's run, counters or summary either.
+- A session that shuts down releases ownership, which keeps `/new`, `/resume` and `/reload` working.
+
+### Tests
+
+- 147 offline tests, 13 files: `tests/nested-session.test.mjs` covers the nested factory, its
+  events, its shutdown, the parent's own settle and the hand-over to the next session.
+
 ## 0.8.4 - 2026-11-06
+
+This one shipped on GitHub only; npm goes from `0.8.3` straight to `0.8.5`.
 
 ### Fixed
 
