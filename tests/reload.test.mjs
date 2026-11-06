@@ -138,4 +138,48 @@ test("a reload rebuilds parent tracking without stacking", async () => {
 	assert.equal(trackingAfter.originalAddChild, trackingBefore.originalAddChild, "no addChild is nested in another");
 });
 
+test("a reload that lost the run map draws the summary instead of fallback rows", async () => {
+	// pi clears the state in `session_shutdown`, rebuilds the transcript, and only
+	// then emits `session_start` with the branch — a frame drawn in between used to
+	// render every call as `● name(arg)` and keep it for the rest of the session.
+	const branch = [
+		{ type: "message", message: { role: "user", content: [{ type: "text", text: "do it" }] } },
+		{
+			type: "message",
+			message: {
+				role: "assistant",
+				durationMs: 1200,
+				content: [{ type: "toolCall", id: "heal-1", name: "bash", arguments: { command: "git status" } }],
+			},
+		},
+		{ type: "custom", customType: "cc-tools-summary", data: { thinkingMs: 0, workedMs: 1200 } },
+	];
+	const ctx = { ui, sessionManager: { getBranch: () => branch } };
+	const reloaded = await evaluateAgain(readFileSync(EXTENSION_PATH, "utf8"));
+
+	await reloaded.emit("session_start", {}, ctx);
+	await reloaded.emit("session_shutdown", { reason: "reload" }, ctx);
+
+	const rebuilt = tree();
+	rebuilt.add(tool("bash", "heal-1", { command: "git status" })).updateResult(toolResult());
+	assert.match(rebuilt.rows()[0], /ran 1 shell command/, "the run comes back from the branch");
+	assert.ok(!rebuilt.text().includes("● bash(git status)"), "no fallback row for a call the branch knows");
+
+	const healed = proto[PATCH].runs.size;
+	rebuilt.frame();
+	assert.equal(proto[PATCH].runs.size, healed, "a healed map is not rebuilt again");
+});
+
+test("an unknown call still falls back when the branch has no run for it", async () => {
+	const reloaded = await evaluateAgain(readFileSync(EXTENSION_PATH, "utf8"));
+	const emptyCtx = { ui, sessionManager: { getBranch: () => [] } };
+
+	await reloaded.emit("session_start", {}, emptyCtx);
+	await reloaded.emit("session_shutdown", { reason: "reload" }, emptyCtx);
+
+	const box = tree();
+	box.add(tool("bash", "orphan-heal", { command: "ls" }));
+	assert.equal(box.rows()[0], "● bash(ls)", "nothing in the branch: the fallback row stands");
+});
+
 await runTests("reload");

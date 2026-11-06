@@ -108,6 +108,11 @@ const PULSE_GLOW = 0.14;
 const PULSE_FRAME_MS = 90;
 /** Cadence when the theme cannot animate: only the seconds counter needs it. */
 const IDLE_TICK_MS = 1000;
+/**
+ * Shortest gap between two self-heals of the run map. A frame must not scan the
+ * whole branch, and the window this repairs lasts a few milliseconds anyway.
+ */
+const HEAL_INTERVAL_MS = 1000;
 
 /** Opt-in tracing: set PI_CC_TOOLS_DEBUG=/path/to/log to capture what the rows do. */
 function trace(message: string): void {
@@ -177,6 +182,10 @@ type PatchState = {
 	enabled: boolean;
 	revealAll: boolean;
 	ui?: ExtensionContext["ui"];
+	/** Session the rows read their runs from: a lost run map is rebuilt from it. */
+	sessionManager?: ExtensionContext["sessionManager"];
+	/** Last self-heal attempt, so a render cannot scan the branch on every frame. */
+	healAt?: number;
 	live: Run | null;
 	/** toolCallId -> run it belongs to (live and replayed). */
 	runs: Map<string, Run>;
@@ -960,11 +969,11 @@ function persisted(run: Run): PersistedSummary {
 }
 
 /** Rebuild per-run state from the session branch so replays render the same summaries. */
-function loadRuns(ctx: ExtensionContext, st: PatchState): void {
+function loadRuns(st: PatchState, manager: ExtensionContext["sessionManager"]): void {
 	st.runs = new Map();
 	let entries: any[] = [];
 	try {
-		entries = ctx.sessionManager.getBranch() as any[];
+		entries = manager.getBranch() as any[];
 	} catch {
 		return;
 	}
@@ -1006,6 +1015,27 @@ function loadRuns(ctx: ExtensionContext, st: PatchState): void {
 		}
 	}
 	for (const run of seen) run.finished = true;
+}
+
+/**
+ * Rebuild an empty run map while tool rows are still on screen. A `/reload`
+ * clears it in `session_shutdown`, and pi rebuilds the transcript before
+ * `session_start` hands the branch back, so a frame drawn in that window renders
+ * every call as its fallback line — and nothing would ever replace it, because
+ * the rows only re-render when their own state changes. Without a run map a row
+ * also loses its summary band, so the whole turn collapses to `● name(arg)`.
+ * Healing on the first such render closes that window instead of waiting for a
+ * session the user may never reload again.
+ */
+function healRuns(st: PatchState): void {
+	if (st.live || st.runs.size > 0) return;
+	const manager = st.sessionManager;
+	if (!manager || typeof manager.getBranch !== "function") return;
+	const now = Date.now();
+	if (st.healAt !== undefined && now - st.healAt < HEAL_INTERVAL_MS) return;
+	st.healAt = now;
+	trace("H run map lost: rebuilding runs from the branch");
+	loadRuns(st, manager);
 }
 
 /** A previous load of this file — or an older copy of it — may still wrap the prototype. */
@@ -1110,6 +1140,9 @@ function installPatch(): PatchState {
 	proto.render = function (width: number): string[] {
 		if (!st.enabled || this.expanded) return originalRender.call(this, width);
 		if (this.hideComponent || width < 1) return [];
+		// Rows are on screen but their runs are gone: a reload mid-session. Draw
+		// them from the branch again rather than degrading them to fallback lines.
+		if (!st.live && st.runs.size === 0) healRuns(st);
 		// In all rows mode every call keeps its own row; the summary band closes the run.
 		if (st.revealAll) {
 			const run = runOf(st, this);
@@ -1272,6 +1305,9 @@ export default function (pi: ExtensionAPI) {
 	// leave the rows permanently hidden with no summary.
 	const on = (name: any, handler: any) =>
 		pi.on(name, (event: any, ctx: any) => {
+			// Kept for the self-heal: the branch has to be readable from a render,
+			// which pi may schedule before this load's `session_start` arrives.
+			if (ctx?.sessionManager) st.sessionManager = ctx.sessionManager;
 			try {
 				return handler(event, ctx);
 			} catch {
@@ -1288,8 +1324,9 @@ export default function (pi: ExtensionAPI) {
 		st.thinkingStartAt = 0;
 		st.nested = new Map();
 		st.slotLines = LIVE_SLOT_LINES;
+		st.healAt = undefined;
 		stopTicker(st);
-		loadRuns(ctx, st);
+		loadRuns(st, ctx.sessionManager);
 		// The placeholder text is filtered out of the transcript; keeping a stable
 		// label is what lets the filter recognise those lines.
 		ctx.ui.setHiddenThinkingLabel?.("Thinking…");
@@ -1418,6 +1455,9 @@ export default function (pi: ExtensionAPI) {
 		st.thinkingStartAt = 0;
 		st.nested = new Map();
 		st.slotLines = LIVE_SLOT_LINES;
+		// The map is empty from here on: the first row drawn before `session_start`
+		// hands the branch back has to be allowed to rebuild it at once.
+		st.healAt = undefined;
 	});
 
 	// Every way of changing the state ends here: nothing animates while the
